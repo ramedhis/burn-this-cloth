@@ -160,6 +160,7 @@
     ROWS = densities[densityIdx].r;
     SUB = densities[densityIdx].sub;
     allocFineBuffers();
+    allocAttachBuffers();
 
     const rect = clothRect();
     const spx = rect.w / COLS, spy = rect.h / ROWS;
@@ -168,11 +169,9 @@
     for (let j = 0; j <= ROWS; j++) {
       for (let i = 0; i <= COLS; i++) {
         const rx = rect.x + i * spx, ry = rect.y + j * spy;
-        const pinned =
-          (i === 0 && j === 0) ||
-          (i === COLS && j === 0) ||
-          (i === 0 && j === ROWS) ||
-          (i === COLS && j === ROWS);
+        // Whole top edge anchored now, like a curtain rod -- cloth
+        // still hangs and sways freely along the bottom and sides
+        const pinned = j === 0;
         particles.push({
           x: rx, y: ry, restX: rx, restY: ry,
           vx: 0, vy: 0,
@@ -220,16 +219,76 @@
   }
 
   // Cloth Physics
-  const SPRING_REST = 42;
-  const SPRING_NEIGH = 18;
-  const DAMPING = 0.90;
-  const PUSH_RADIUS = 90;
-  const PUSH_STRENGTH = 2600;
+  // Tuned more aggressive than before: softer pull back to rest and
+  // less damping means pushes carry further and the cloth keeps
+  // swinging/oscillating rather than snapping back and settling fast.
+  // Push itself also hits harder and reaches a bit further.
+  const SPRING_REST = 30;
+  const SPRING_NEIGH = 14;
+  const DAMPING = 0.96;
+  const PUSH_RADIUS = 110;
+  const PUSH_STRENGTH = 3800;
+
+  // How hard gravity pulls a point that's still attached but actively
+  // burning (partial, scales with how burned it is), versus a point
+  // that's been fully cut off from the anchored top edge and is in
+  // true freefall (full strength, no scaling)
+  const GRAVITY_BURN = 420;
+  const GRAVITY_FALL = 900;
+
+  // Above this burn amount, a point counts as "burned through" for
+  // connectivity purposes -- fire has eaten enough of it that it can
+  // no longer transmit support to whatever hangs below it
+  const CUT_THRESHOLD = 0.55;
 
   let mouse = { x: -9999, y: -9999, active: false };
 
+  // Tracks, each frame, which grid points are still structurally
+  // reachable from the anchored top row through intact (not burned
+  // through, not destroyed) cloth. A point that fire has cut off from
+  // every path back to the anchor is torn free -- it stops trying to
+  // spring back to its original position and just falls.
+  let attachedBuf = null;
+  let bfsQueue = null;
+
+  function allocAttachBuffers() {
+    const n = (COLS + 1) * (ROWS + 1);
+    attachedBuf = new Uint8Array(n);
+    bfsQueue = new Int32Array(n);
+  }
+
+  function computeAttachment() {
+    attachedBuf.fill(0);
+    let qHead = 0, qTail = 0;
+    for (let i = 0; i <= COLS; i++) {
+      const p = particles[idx(i, 0)];
+      if (p.pinned) {
+        const id = idx(i, 0);
+        attachedBuf[id] = 1;
+        bfsQueue[qTail++] = id;
+      }
+    }
+    while (qHead < qTail) {
+      const cur = bfsQueue[qHead++];
+      const ci = cur % (COLS + 1);
+      const cj = (cur / (COLS + 1)) | 0;
+      const nbs = [[ci - 1, cj], [ci + 1, cj], [ci, cj - 1], [ci, cj + 1]];
+      for (const [ni, nj] of nbs) {
+        if (ni < 0 || ni > COLS || nj < 0 || nj > ROWS) continue;
+        const nid = idx(ni, nj);
+        if (attachedBuf[nid]) continue;
+        const np = particles[nid];
+        if (np.destroyed || np.burn >= CUT_THRESHOLD) continue;
+        attachedBuf[nid] = 1;
+        bfsQueue[qTail++] = nid;
+      }
+    }
+  }
+
   function stepCloth(dt) {
     dt = Math.min(dt, 1 / 30); // Clamp so a dropped frame doesn't launch the cloth into orbit
+
+    computeAttachment();
 
     for (let j = 0; j <= ROWS; j++) {
       for (let i = 0; i <= COLS; i++) {
@@ -237,15 +296,36 @@
         if (p.pinned) { p.x = p.restX; p.y = p.restY; p.vx = 0; p.vy = 0; continue; }
         if (p.destroyed) continue;
 
-        let fx = (p.restX - p.x) * SPRING_REST;
-        let fy = (p.restY - p.y) * SPRING_REST;
+        const isAttached = attachedBuf[idx(i, j)] === 1;
+        const burnAmt = Math.min(p.burn, 1);
+
+        // Still attached: own fiber weakens as it individually burns.
+        // Cut off entirely: there's nothing structurally above it
+        // anymore, so it stops trying to spring back to its original
+        // position at all -- only gravity and its neighbours (also
+        // torn free) act on it from here, so the whole flap falls
+        // together instead of disintegrating into loose points.
+        const springScale = isAttached ? 1 - burnAmt * 0.9 : 0;
+        const sameSideScale = isAttached ? springScale : 0.6;
+
+        let fx = (p.restX - p.x) * SPRING_REST * springScale;
+        let fy = (p.restY - p.y) * SPRING_REST * springScale;
 
         const neighbors = [[i - 1, j], [i + 1, j], [i, j - 1], [i, j + 1]];
         for (const [ni, nj] of neighbors) {
           if (ni < 0 || ni > COLS || nj < 0 || nj > ROWS) continue;
-          const n = particles[idx(ni, nj)];
-          fx += (n.x - p.x - (n.restX - p.restX)) * SPRING_NEIGH;
-          fy += (n.y - p.y - (n.restY - p.restY)) * SPRING_NEIGH;
+          const nid = idx(ni, nj);
+          const n = particles[nid];
+          if (n.destroyed) continue;
+          // A torn thread carries no force in either direction -- once
+          // a neighbour ends up on the other side of the attachment
+          // boundary, there's nothing left connecting them. Without
+          // this, a still-attached neighbour keeps elastically tugging
+          // on the falling piece (and vice versa), which is what was
+          // making torn cloth hover instead of dropping cleanly.
+          if ((attachedBuf[nid] === 1) !== isAttached) continue;
+          fx += (n.x - p.x - (n.restX - p.restX)) * SPRING_NEIGH * sameSideScale;
+          fy += (n.y - p.y - (n.restY - p.restY)) * SPRING_NEIGH * sameSideScale;
         }
 
         if (mouse.active) {
@@ -258,17 +338,33 @@
           }
         }
 
-        if (p.burning || p.burn > 0) {
+        if (!isAttached) {
+          // Torn free -- true freefall, with a little flame shudder
+          // still playing if it happens to still be alight on the way down
+          fy += GRAVITY_FALL;
+          if (p.burning) {
+            p.heat += dt;
+            fx += Math.sin(p.seed + p.heat * 9) * 10 * burnAmt;
+          }
+        } else if (p.burning || p.burn > 0) {
           p.heat += dt;
-          // Burning bits curl up and shudder a little, heat rises after all
-          fy -= 40 * Math.min(p.burn, 1);
-          fx += Math.sin(p.seed + p.heat * 9) * 14 * Math.min(p.burn, 1);
+          // Weakened fibers give in to gravity and start to sag, with
+          // a little flame-flicker shudder side to side as it goes
+          fy += GRAVITY_BURN * burnAmt;
+          fx += Math.sin(p.seed + p.heat * 9) * 10 * burnAmt;
         }
 
         p.vx = (p.vx + fx * dt) * DAMPING;
         p.vy = (p.vy + fy * dt) * DAMPING;
         p.x += p.vx * dt;
         p.y += p.vy * dt;
+
+        // Once a torn-free piece has fallen well past the bottom edge,
+        // it's off the "ground" and out of frame -- let it go
+        if (!isAttached && p.y > HEIGHT + 80) {
+          p.destroyed = true;
+          spawnAshPuff(p.x, HEIGHT + 20);
+        }
       }
     }
 
@@ -577,6 +673,13 @@
   function fineIdx(i, j) { return j * (fineCols + 1) + i; }
   function rowTmpIdx(i, j) { return j * (fineCols + 1) + i; } // j here is a *coarse* row
 
+  // Coarse-grid attachment lookup, clamped to the real grid range --
+  // used below to keep the smoothed render mesh from blending across
+  // a tear (which is what caused the stretched/elongated triangles)
+  function attachedAt(ci, cj) {
+    return attachedBuf[idx(clampCol(ci), clampRow(cj))] === 1;
+  }
+
   // Builds the render mesh from the current particle positions. Two
   // passes, same idea the comment above describes: stretch every
   // coarse row out to fine resolution first (horizontal pass), then
@@ -593,7 +696,20 @@
     // Pass 1: horizontal, one real row at a time
     for (let j = 0; j <= ROWS; j++) {
       for (let i = 0; i < COLS; i++) {
-        const ia = clampCol(i - 1), ib = i, ic = clampCol(i + 1), id = clampCol(i + 2);
+        let ia = clampCol(i - 1), ib = i, ic = clampCol(i + 1), id = clampCol(i + 2);
+
+        // A cell whose two real endpoints sit on opposite sides of the
+        // attachment boundary IS the tear -- it never renders, which
+        // is what leaves a visible gap/rip instead of a smoothed-over
+        // seam. The outer control points (ia/id) also get pulled back
+        // to their nearer real endpoint whenever THEY cross a tear, so
+        // a cell one step away from the boundary doesn't have its
+        // curve dragged toward a wildly displaced disconnected patch.
+        const attB = attachedAt(ib, j), attC = attachedAt(ic, j);
+        const torn = attB !== attC;
+        if (attachedAt(ia, j) !== attB) ia = ib;
+        if (attachedAt(id, j) !== attC) id = ic;
+
         const pa = particles[idx(ia, j)], pb = particles[idx(ib, j)];
         const pc = particles[idx(ic, j)], pd = particles[idx(id, j)];
         const ba = pa.destroyed ? 0 : 1, bb = pb.destroyed ? 0 : 1;
@@ -605,7 +721,7 @@
           rowTmpX[n] = catmullRom(pa.x, pb.x, pc.x, pd.x, t);
           rowTmpY[n] = catmullRom(pa.y, pb.y, pc.y, pd.y, t);
           rowTmpBurn[n] = catmullRom(pa.burn, pb.burn, pc.burn, pd.burn, t);
-          rowTmpAlive[n] = catmullRom(ba, bb, bc, bd, t);
+          rowTmpAlive[n] = torn ? 0 : catmullRom(ba, bb, bc, bd, t);
         }
       }
       // Right edge of the cloth -- not covered by the loop above since
@@ -621,8 +737,19 @@
     for (let i = 0; i <= fineCols; i++) {
       const u = i / SUB;
       const uPix = rect.x + u * spx;
+      const coarseCol = Math.round(u); // nearest real column, for attachment lookups only
       for (let j = 0; j < ROWS; j++) {
-        const ja = clampRow(j - 1), jb = j, jc = clampRow(j + 1), jd = clampRow(j + 2);
+        let ja = clampRow(j - 1), jb = j, jc = clampRow(j + 1), jd = clampRow(j + 2);
+
+        // Same idea as Pass 1: a cell straddling the attachment
+        // boundary vertically is the tear itself (never rendered),
+        // and the outer control points get pulled back to their
+        // nearer real endpoint if they'd otherwise reach across it
+        const attB = attachedAt(coarseCol, jb), attC = attachedAt(coarseCol, jc);
+        const torn = attB !== attC;
+        if (attachedAt(coarseCol, ja) !== attB) ja = jb;
+        if (attachedAt(coarseCol, jd) !== attC) jd = jc;
+
         const xa = rowTmpX[rowTmpIdx(i, ja)], xb = rowTmpX[rowTmpIdx(i, jb)];
         const xc = rowTmpX[rowTmpIdx(i, jc)], xd = rowTmpX[rowTmpIdx(i, jd)];
         const ya = rowTmpY[rowTmpIdx(i, ja)], yb = rowTmpY[rowTmpIdx(i, jb)];
@@ -643,7 +770,7 @@
           // don't get a scorch darker than "fully burned" or a hole
           // with negative alpha weirdness
           fineBurn[n] = Math.max(0, Math.min(1, catmullRom(bua, bub, buc, bud, t)));
-          fineAlive[n] = Math.max(0, Math.min(1, catmullRom(ala, alb, alc, ald, t)));
+          fineAlive[n] = torn ? 0 : Math.max(0, Math.min(1, catmullRom(ala, alb, alc, ald, t)));
           fineU[n] = uPix;
           fineV[n] = rect.y + (j * SUB + k) / SUB * spy;
         }
