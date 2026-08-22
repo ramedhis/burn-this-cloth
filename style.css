@@ -92,7 +92,7 @@
     color: var(--ink);
   }
 
-  .panel-title span{ color: var(--ink); }
+  .panel-title span{ color: #d1453d; }
   .panel-close {
     appearance: none;
     background: var(--panel);
@@ -144,7 +144,7 @@
   }
 
   .preset-btn:last-child { border-right: none; }
-  .preset-btn.active { background: var(--ink); color: #fff; }
+  .preset-btn.active { background: var(--ink); color: #000; }
 
   .field-pair { display: flex; gap: 8px; }
 
@@ -191,6 +191,12 @@
     border-color: var(--ink);
     color: var(--ink);
     background: var(--wash);
+  }
+
+  #gridToggleBtn.is-on {
+    background: var(--ink);
+    color: #000;
+    border-color: var(--ink);
   }
 
   input[type=file] { display: none; }

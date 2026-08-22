@@ -273,6 +273,7 @@
     }
     refreshClothTexture();
     buildMeshObjects();
+    clothContainer.addChild(gridGraphics); // buildMeshObjects re-adds the mesh on top, pull the grid back above it
   }
 
   function applyCanvasSize(w, h) {
@@ -420,6 +421,27 @@
   let geometry = null, mesh = null;
   let positions, uvs, burnArr, indices;
   const glowPool = [];
+
+  // wireframe overlay, just the structural links (no diagonals, it's
+  // unreadable with those on) -- reuses linkIntact so the lines drop
+  // out exactly where the cloth actually tears instead of keeping
+  // their own separate idea of what's still connected
+  const gridGraphics = new PIXI.Graphics();
+  clothContainer.addChild(gridGraphics);
+  let showGrid = false;
+
+  function drawGrid() {
+    gridGraphics.clear();
+    if (!showGrid) return;
+    gridGraphics.lineStyle(1, 0xffffff, 0.35);
+    for (const con of constraints) {
+      if (con.diagonal) continue;
+      const pa = particles[con.a], pb = particles[con.b];
+      if (!linkIntact(pa, pb)) continue;
+      gridGraphics.moveTo(pa.x, pa.y);
+      gridGraphics.lineTo(pb.x, pb.y);
+    }
+  }
 
   const vertexSrc = `
     attribute vec2 aVertexPosition;
@@ -823,8 +845,15 @@
 
   document.getElementById('densityBtn').addEventListener('click', (e) => {
     densityIdx = (densityIdx + 1) % densities.length;
-    e.target.textContent = 'Grid: ' + densities[densityIdx].label;
+    e.target.textContent = 'Density: ' + densities[densityIdx].label;
     resetCloth(true);
+  });
+
+  const gridToggleBtn = document.getElementById('gridToggleBtn');
+  gridToggleBtn.addEventListener('click', () => {
+    showGrid = !showGrid;
+    gridToggleBtn.textContent = 'Mesh: ' + (showGrid ? 'shown' : 'hidden');
+    gridToggleBtn.classList.toggle('is-on', showGrid);
   });
 
   // Canvas size controls:
@@ -868,6 +897,7 @@
     stepCloth(dt);
     updateFire(dt);
     updateMeshBuffers();
+    drawGrid();
     updateFireSprites();
     app.renderer.render(app.stage);
     requestAnimationFrame(loop);
