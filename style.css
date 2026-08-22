@@ -1,13 +1,11 @@
   :root{
-    /* White/grey minimalist palette  */
-    --bg: #ffffff;
-    --panel: #ffffff;
-    --line: #dcdcd8;
-    --ink: #1e1e1c;
+    /* black on black, basically -- text stays grey/white, nothing else gets a color */
+    --bg: #000000;
+    --panel: #0c0c0c;
+    --line: #2b2b2b;
+    --ink: #f0f0ee;
     --ink-dim: #8a8a86;
-    --wash: #f0f0ee;
-    --ember: #e8792e;
-    --ember-hot: #f4a52a;
+    --wash: #161616;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -26,7 +24,7 @@
   .stage {
     position: relative;
     width: 600px; height: 600px;
-    background: #ffffff;
+    background: #000000;
     border: 1px solid var(--line);
     touch-action: none;
     cursor: crosshair;
@@ -94,7 +92,7 @@
     color: var(--ink);
   }
 
-  .panel-title span{ color: var(--ember); }
+  .panel-title span{ color: var(--ink); }
   .panel-close {
     appearance: none;
     background: var(--panel);

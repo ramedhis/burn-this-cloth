@@ -143,13 +143,13 @@
   function drawPlaceholderTexture() {
     const rect = clothRect();
     const g = texCtx.createLinearGradient(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
-    g.addColorStop(0, '#f2f2f0');
-    g.addColorStop(0.5, '#e2e2de');
-    g.addColorStop(1, '#d0d0cc');
+    g.addColorStop(0, '#2e2e2c');
+    g.addColorStop(0.5, '#232321');
+    g.addColorStop(1, '#161615');
     texCtx.fillStyle = g;
     texCtx.fillRect(rect.x, rect.y, rect.w, rect.h);
 
-    texCtx.strokeStyle = 'rgba(90,90,86,0.35)';
+    texCtx.strokeStyle = 'rgba(200,200,196,0.25)';
     texCtx.lineWidth = 3;
     texCtx.lineCap = 'round';
     texCtx.beginPath();
@@ -168,7 +168,7 @@
     const dw = iw * scale, dh = ih * scale;
     const dx = rect.x + (rect.w - dw) / 2, dy = rect.y + (rect.h - dh) / 2;
     texCtx.clearRect(0, 0, WIDTH, HEIGHT);
-    texCtx.fillStyle = '#e2e2de';
+    texCtx.fillStyle = '#1a1a18';
     texCtx.fillRect(rect.x, rect.y, rect.w, rect.h);
     texCtx.drawImage(img, dx, dy, dw, dh);
   }
@@ -446,6 +446,13 @@
     uniform sampler2D uSampler;
     uniform vec4 uColor;
 
+    // cheap 2D hash, just need something that doesn't look like a grid
+    float hash(vec2 p) {
+      p = fract(p * vec2(123.34, 456.21));
+      p += dot(p, p + 45.32);
+      return fract(p.x * p.y);
+    }
+
     void main(void) {
       vec4 texColor = texture2D(uSampler, vTextureCoord);
       float t = clamp(vBurn, 0.0, 1.0);
@@ -465,6 +472,16 @@
       vec3 finalColor = mix(scorched, emberColor, glow * 0.9);
 
       gl_FragColor = vec4(finalColor, texColor.a) * uColor;
+
+      // eat little holes into the fabric before the whole triangle
+      // gets pulled from the mesh (CUT_THRESHOLD on the JS side) --
+      // otherwise a burning patch just vanishes as one clean wedge,
+      // which is what made the tear line read as "triangle" instead
+      // of "burnt cloth". noise-driven so the lace pattern doesn't
+      // line up with the grid underneath it.
+      float grain = hash(floor(vTextureCoord * 260.0));
+      float keepChance = mix(1.0, 0.1, smoothstep(0.28, 0.55, t));
+      if (grain > keepChance) discard;
     }
   `;
 
@@ -514,16 +531,36 @@
         const v00 = idx(i, j), v10 = idx(i + 1, j), v01 = idx(i, j + 1), v11 = idx(i + 1, j + 1);
         const p00 = particles[v00], p10 = particles[v10], p01 = particles[v01], p11 = particles[v11];
 
-        if (linkIntact(p00, p10) && linkIntact(p10, p11) && linkIntact(p00, p11)) {
-          indices[n++] = v00; indices[n++] = v10; indices[n++] = v11;
-        } else {
-          indices[n++] = 0; indices[n++] = 0; indices[n++] = 0;
-        }
+        // Flip which corner the diagonal runs through every other
+        // cell (checkerboard). Splitting every cell the same way was
+        // the other half of the "triangle mesh" look -- once a few
+        // adjacent cells burned through, the missing wedges all
+        // pointed the same direction and the tear read as a straight
+        // sawtooth cut instead of a ragged hole.
+        if ((i + j) % 2 === 0) {
+          if (linkIntact(p00, p10) && linkIntact(p10, p11) && linkIntact(p00, p11)) {
+            indices[n++] = v00; indices[n++] = v10; indices[n++] = v11;
+          } else {
+            indices[n++] = 0; indices[n++] = 0; indices[n++] = 0;
+          }
 
-        if (linkIntact(p00, p11) && linkIntact(p11, p01) && linkIntact(p00, p01)) {
-          indices[n++] = v00; indices[n++] = v11; indices[n++] = v01;
+          if (linkIntact(p00, p11) && linkIntact(p11, p01) && linkIntact(p00, p01)) {
+            indices[n++] = v00; indices[n++] = v11; indices[n++] = v01;
+          } else {
+            indices[n++] = 0; indices[n++] = 0; indices[n++] = 0;
+          }
         } else {
-          indices[n++] = 0; indices[n++] = 0; indices[n++] = 0;
+          if (linkIntact(p00, p10) && linkIntact(p10, p01) && linkIntact(p00, p01)) {
+            indices[n++] = v00; indices[n++] = v10; indices[n++] = v01;
+          } else {
+            indices[n++] = 0; indices[n++] = 0; indices[n++] = 0;
+          }
+
+          if (linkIntact(p10, p11) && linkIntact(p11, p01) && linkIntact(p10, p01)) {
+            indices[n++] = v10; indices[n++] = v11; indices[n++] = v01;
+          } else {
+            indices[n++] = 0; indices[n++] = 0; indices[n++] = 0;
+          }
         }
       }
     }
