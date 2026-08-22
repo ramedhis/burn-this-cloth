@@ -145,7 +145,7 @@
     border-right: 1px solid var(--line);
   }
 
-  .preset-btn: last-child { border-right: none; }
+  .preset-btn:last-child { border-right: none; }
   .preset-btn.active { background: var(--ink); color: #fff; }
 
   .field-pair { display: flex; gap: 8px; }
@@ -161,12 +161,12 @@
     flex: 1 1 0;
   }
 
-  input [type=number]:focus {
+  input[type=number]:focus {
     outline: none;
     border-color: var(--ink);
   }
 
-  input [type=number]::placeholder {
+  input[type=number]::placeholder {
     color: var(--ink-dim);
     text-transform: uppercase;
     font-size: 11px;
