@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>burn-this-cloth</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <script src="script.js"></script>
+
+  <button class="menu-toggle hidden" id="menuToggle" title="show menu">
+    <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M2 4H14M2 8H14M2 12H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
+  </button>
+
+  <div class="panel" id="panel">
+    <div class="panel-head" id="panelHead">
+      <div class="panel-title">burn<span>-this-</span>cloth</div>
+      <button class="panel-close" id="panelClose" title="hide">&times;</button>
+    </div>
+    <div class="panel-body">
+      <div class="panel-hint">
+        Hover anywhere on the image to push the cloth. Click a spot to set it alight.
+      </div>
+      <div class="panel-row">
+        <label class="file-btn">
+          Load image
+          <input type="file" id="fileInput" accept="image/*" />
+        </label>
+        <button id="resetBtn">Reset</button>
+        <button id="densityBtn">Grid: fine</button>
+      </div>
+
+      <div class="panel-label">Canvas size</div>
+      <div class="preset-group" id="presetRow">
+        <button type="button" class="preset-btn" data-preset="square">Square</button>
+        <button type="button" class="preset-btn" data-preset="portrait">Portrait</button>
+        <button type="button" class="preset-btn" data-preset="story">Story</button>
+      </div>
+
+      <div class="panel-label">Custom size</div>
+      <div class="panel-row">
+        <div class="field-pair">
+          <input type="number" id="widthInput" placeholder="W" min="1" step="1" />
+          <input type="number" id="heightInput" placeholder="H" min="1" step="1" />
+          <button type="button" id="applySizeBtn">Apply</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage-wrap">
+    <div class="stage">
+      <canvas id="c"></canvas>
+    </div>
+  </div>
+
+</body>
+</html>
