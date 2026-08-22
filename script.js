@@ -43,25 +43,29 @@
   });
 })();
 
-// Cloth + fire toy. Two systems glued together:
+// Cloth + fire toy, PixiJS edition. Two systems glued together:
 //   1) A mass-spring grid that warps an image (the "cloth")
 //   2) A small particle sim for flames/embers/smoke (the "fire")
 // They only talk to each other through burn values on grid points.
-
+//
+// This version renders the cloth as a real WebGL mesh (via PixiJS)
+// instead of a hand-warped 2D canvas. The old approach split every
+// grid cell into two triangles and warped each one with its own
+// clip()+setTransform()+drawImage() call -- cheap conceptually, but
+// every triangle edge was a hard affine seam, which is why the old
+// code needed a whole second pass (Catmull-Rom over the coarse grid)
+// just to fake smoothness. A GPU mesh doesn't need that fake: the
+// rasterizer interpolates position, UV, and burn-amount per pixel
+// across the whole mesh, so there's no seam to hide in the first
+// place, no separate "fine mesh" resample step needed, and the physics
+// grid itself can run at a much higher resolution since the render
+// cost is one draw call regardless of vertex count.
 (function () {
   const canvas = document.getElementById('c');
-  const ctx = canvas.getContext('2d');
+  const stageEl = document.querySelector('.stage');
 
-  // Canvas is no longer locked to a square -- these two are mutable now,
-  // changed via applyCanvasSize() when someone picks a preset or types
-  // in a custom width/height.
-  // Default stays at the original 600x600
   let WIDTH = 600;
   let HEIGHT = 600;
-  canvas.width = WIDTH;
-  canvas.height = HEIGHT;
-
-  const stageEl = document.querySelector('.stage');
 
   // Sizes the box the canvas actually sits in so it never blows past
   // the viewport, while keeping the true pixel aspect ratio intact
@@ -76,28 +80,44 @@
   }
   window.addEventListener('resize', fitStage);
 
-  // Default used to be "fine" back when the canvas defaulted to
-  // 600x600, and stays "fine" now since the default canvas size is
-  // still 600x600 -- only picking a bigger preset should cost you
-  // anything, not just having the feature available
-  // "sub" is how many render cells each physics cell gets split into
-  // when we build the smoothed mesh below -- picked by hand rather
-  // than from some formula so each tier lands somewhere sane instead
-  // of trusting a ratio to do the right thing at both extremes.
-  // coarse*2 and fine*1 land on the same rendered resolution (36x36)
-  // on purpose, so "coarse" gets to look as smooth as "fine" used to
-  // while the actual spring grid underneath stays cheap. normal gets
-  // its own *2 bump since it's the one people are likely to leave it
-  // on by default.
+  // PixiJS application, rendering into the existing <canvas id="c">.
+  // resolution stays at 1 and autoDensity is left off on purpose --
+  // the CSS rule (canvas { width:100%; height:100% }) is what scales
+  // the drawing surface up to fill .stage, same as the old plain-2D
+  // canvas did. Letting Pixi manage canvas.style itself (autoDensity)
+  // would fight that rule.
+  const app = new PIXI.Application({
+    view: canvas,
+    width: WIDTH,
+    height: HEIGHT,
+    resolution: 1,
+    antialias: true,
+    backgroundAlpha: 0,
+  });
+  app.stop(); // we drive our own rAF loop below and render manually
+
+  const clothContainer = new PIXI.Container();
+  const smokeContainerObj = new PIXI.Container();
+  const glowContainerObj = new PIXI.Container();
+  const emberContainerObj = new PIXI.Container();
+  const flameContainerObj = new PIXI.Container();
+  app.stage.addChild(clothContainer, smokeContainerObj, glowContainerObj, emberContainerObj, flameContainerObj);
+
+  // Grid resolution now drives BOTH physics and the render mesh --
+  // there's no separate "sub" render multiplier anymore, since the
+  // GPU interpolates the mesh smoothly no matter how coarse the
+  // spring grid is. Numbers are picked to stay comfortably real-time
+  // for the JS-side spring simulation while looking good on a GPU
+  // mesh (which handles far more vertices than the old canvas
+  // triangle-warp approach ever could at 60fps).
   const densities = [
-    { c: 18, r: 18, label: 'coarse', sub: 2 },
-    { c: 26, r: 26, label: 'normal', sub: 2 },
-    { c: 36, r: 36, label: 'fine', sub: 1 },
+    { c: 22, r: 22, label: 'coarse' },
+    { c: 34, r: 34, label: 'normal' },
+    { c: 48, r: 48, label: 'fine' },
   ];
   let densityIdx = 2;
   let COLS = densities[densityIdx].c;
   let ROWS = densities[densityIdx].r;
-  let SUB = densities[densityIdx].sub;
 
   // Fixed pixel gap on every side
   const CLOTH_GAP = 20;
@@ -108,17 +128,20 @@
     };
   }
 
+  // texCanvas stays a plain 2D canvas -- it's just where we composite
+  // the source image (or placeholder gradient) before handing the
+  // pixels to Pixi as a texture. All the actual cloth deformation and
+  // rendering downstream is GPU-side.
   const texCanvas = document.createElement('canvas');
   texCanvas.width = WIDTH;
   texCanvas.height = HEIGHT;
   const texCtx = texCanvas.getContext('2d');
 
-  let particles = [];
   let sourceImage = null;
+  let clothTexture = null;
 
   function drawPlaceholderTexture() {
     const rect = clothRect();
-
     const g = texCtx.createLinearGradient(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
     g.addColorStop(0, '#f2f2f0');
     g.addColorStop(0.5, '#e2e2de');
@@ -126,7 +149,6 @@
     texCtx.fillStyle = g;
     texCtx.fillRect(rect.x, rect.y, rect.w, rect.h);
 
-    // Two strokes corner-to-corner across the cloth
     texCtx.strokeStyle = 'rgba(90,90,86,0.35)';
     texCtx.lineWidth = 3;
     texCtx.lineCap = 'round';
@@ -142,25 +164,78 @@
     const iw = img.naturalWidth || img.width;
     const ih = img.naturalHeight || img.height;
     const rect = clothRect();
-
-    // cover-fit: scale so the shorter side fills the cloth, crop the rest
     const scale = Math.max(rect.w / iw, rect.h / ih);
     const dw = iw * scale, dh = ih * scale;
     const dx = rect.x + (rect.w - dw) / 2, dy = rect.y + (rect.h - dh) / 2;
     texCtx.clearRect(0, 0, WIDTH, HEIGHT);
-
-    // This only ever shows through if the loaded image has transparent pixels
     texCtx.fillStyle = '#e2e2de';
     texCtx.fillRect(rect.x, rect.y, rect.w, rect.h);
     texCtx.drawImage(img, dx, dy, dw, dh);
   }
 
+  // Recreates the GPU texture from whatever's currently painted on
+  // texCanvas. Destroy-and-recreate rather than update() in place --
+  // this only ever runs on user actions (load image, reset, resize),
+  // never per-frame, so the extra GPU upload cost is a non-issue and
+  // it sidesteps any ambiguity about stale dimensions after a resize.
+  function refreshClothTexture() {
+    if (clothTexture) clothTexture.destroy(true);
+    clothTexture = PIXI.Texture.from(texCanvas);
+    clothTexture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
+  }
+
+  function idx(i, j) { return j * (COLS + 1) + i; }
+
+  let particles = [];
+  // Structural + shear constraints between neighbouring particles.
+  // This is the entire support structure -- there is no separate
+  // "attachment" bookkeeping anymore. A point stays up only because
+  // an unbroken chain of these links connects it, particle by
+  // particle, back to a still-intact pinned point on the top row.
+  // Burn a link and only the particles that actually depended on
+  // that specific link lose support -- nothing routes "the long way
+  // around" to fake staying attached.
+  let constraints = [];
+
+  function addConstraint(a, b, diagonal) {
+    const pa = particles[a], pb = particles[b];
+    const dx = pa.restX - pb.restX, dy = pa.restY - pb.restY;
+    constraints.push({ a, b, restLen: Math.sqrt(dx * dx + dy * dy), diagonal: !!diagonal });
+  }
+
+  function buildConstraints() {
+    constraints = [];
+    for (let j = 0; j <= ROWS; j++) {
+      for (let i = 0; i <= COLS; i++) {
+        if (i < COLS) addConstraint(idx(i, j), idx(i + 1, j));
+        if (j < ROWS) addConstraint(idx(i, j), idx(i, j + 1));
+      }
+    }
+    // Shear/diagonal bracing so the sheet doesn't collapse into a
+    // shapeless mess -- softer than the structural links so it can
+    // still fold and drape instead of acting like a rigid plate.
+    for (let j = 0; j < ROWS; j++) {
+      for (let i = 0; i < COLS; i++) {
+        addConstraint(idx(i, j), idx(i + 1, j + 1), true);
+        addConstraint(idx(i + 1, j), idx(i, j + 1), true);
+      }
+    }
+  }
+
+  // A link (real or implied, e.g. a mesh-render triangle edge) still
+  // carries support only if neither endpoint is gone and neither has
+  // burned past the cut threshold. Used identically by the physics
+  // solver (does this constraint pull?) and the mesh renderer (does
+  // this triangle still exist?), so the two can never disagree about
+  // where a tear is.
+  function linkIntact(pa, pb) {
+    if (pa.destroyed || pb.destroyed) return false;
+    return Math.max(pa.burn, pb.burn) < CUT_THRESHOLD;
+  }
+
   function buildGrid() {
     COLS = densities[densityIdx].c;
     ROWS = densities[densityIdx].r;
-    SUB = densities[densityIdx].sub;
-    allocFineBuffers();
-    allocAttachBuffers();
 
     const rect = clothRect();
     const spx = rect.w / COLS, spy = rect.h / ROWS;
@@ -169,28 +244,23 @@
     for (let j = 0; j <= ROWS; j++) {
       for (let i = 0; i <= COLS; i++) {
         const rx = rect.x + i * spx, ry = rect.y + j * spy;
-        // Whole top edge anchored now, like a curtain rod -- cloth
-        // still hangs and sways freely along the bottom and sides
-        const pinned = j === 0;
+        const pinned = j === 0; // whole top edge anchored, curtain-rod style
         particles.push({
-          x: rx, y: ry, restX: rx, restY: ry,
-          vx: 0, vy: 0,
+          x: rx, y: ry, oldX: rx, oldY: ry, restX: rx, restY: ry,
           pinned,
           burn: 0,
           burning: false,
           destroyed: false,
           heat: 0,
-
-          // Random-ish so neighbouring cells don't all give out at
-          // exactly the same moment
           destroyAt: 0.82 + Math.random() * 0.35,
           seed: Math.random() * 1000,
         });
       }
     }
-  }
 
-  function idx(i, j) { return j * (COLS + 1) + i; }
+    buildConstraints();
+    rebuildGlowPool();
+  }
 
   function resetCloth(keepTexture) {
     buildGrid();
@@ -201,172 +271,111 @@
       if (sourceImage) loadImageCover(sourceImage);
       else drawPlaceholderTexture();
     }
+    refreshClothTexture();
+    buildMeshObjects();
   }
 
-  // Swaps the working resolution
-  // Resizes both the visible canvas and the offscreen texture canvas,
-  // then rebuilds the grid and redraws whatever image (or the placeholder)
-  // at the new dimensions
   function applyCanvasSize(w, h) {
     WIDTH = Math.max(64, Math.min(2160, Math.round(w) || WIDTH));
     HEIGHT = Math.max(64, Math.min(2160, Math.round(h) || HEIGHT));
-    canvas.width = WIDTH;
-    canvas.height = HEIGHT;
     texCanvas.width = WIDTH;
     texCanvas.height = HEIGHT;
+    app.renderer.resize(WIDTH, HEIGHT);
     fitStage();
     resetCloth(false);
   }
 
-  // Cloth Physics
-  // Tuned more aggressive than before: softer pull back to rest and
-  // less damping means pushes carry further and the cloth keeps
-  // swinging/oscillating rather than snapping back and settling fast.
-  // Push itself also hits harder and reaches a bit further.
-  const SPRING_REST = 30;
-  const SPRING_NEIGH = 14;
-  const DAMPING = 0.96;
+  // Cloth physics: Verlet integration + iterative distance-constraint
+  // solving (the standard "position based dynamics" approach browser
+  // cloth demos use). No point is ever sprung back toward its own
+  // original position -- the only thing holding anything up is the
+  // literal chain of intact constraints back to a pinned point.
+  // Gravity is constant and universal; there's no separate "torn
+  // freefall" gravity vs "still attached" gravity, because there's no
+  // separate "attached" state to switch on anymore -- a fully cut-off
+  // flap simply has no intact constraints reaching the anchor, so
+  // nothing holds it back from falling, which the solver produces for
+  // free instead of needing a special case.
+  const DAMPING = 0.985;
+  const GRAVITY = 780;
+  const GRAVITY_BURN_EXTRA = 260; // weakened (but not yet cut) fibers sag a bit extra
   const PUSH_RADIUS = 110;
   const PUSH_STRENGTH = 3800;
-
-  // How hard gravity pulls a point that's still attached but actively
-  // burning (partial, scales with how burned it is), versus a point
-  // that's been fully cut off from the anchored top edge and is in
-  // true freefall (full strength, no scaling)
-  const GRAVITY_BURN = 420;
-  const GRAVITY_FALL = 900;
-
-  // Above this burn amount, a point counts as "burned through" for
-  // connectivity purposes -- fire has eaten enough of it that it can
-  // no longer transmit support to whatever hangs below it
   const CUT_THRESHOLD = 0.55;
+  const CONSTRAINT_ITERATIONS = 5;
 
   let mouse = { x: -9999, y: -9999, active: false };
 
-  // Tracks, each frame, which grid points are still structurally
-  // reachable from the anchored top row through intact (not burned
-  // through, not destroyed) cloth. A point that fire has cut off from
-  // every path back to the anchor is torn free -- it stops trying to
-  // spring back to its original position and just falls.
-  let attachedBuf = null;
-  let bfsQueue = null;
+  function verletIntegrate(dt) {
+    for (let n = 0; n < particles.length; n++) {
+      const p = particles[n];
+      if (p.pinned && !p.destroyed) {
+        p.x = p.restX; p.y = p.restY; p.oldX = p.restX; p.oldY = p.restY;
+        continue;
+      }
+      if (p.destroyed) continue;
 
-  function allocAttachBuffers() {
-    const n = (COLS + 1) * (ROWS + 1);
-    attachedBuf = new Uint8Array(n);
-    bfsQueue = new Int32Array(n);
-  }
+      const burnAmt = Math.min(p.burn, 1);
+      let ax = 0, ay = GRAVITY;
 
-  function computeAttachment() {
-    attachedBuf.fill(0);
-    let qHead = 0, qTail = 0;
-    for (let i = 0; i <= COLS; i++) {
-      const p = particles[idx(i, 0)];
-      if (p.pinned) {
-        const id = idx(i, 0);
-        attachedBuf[id] = 1;
-        bfsQueue[qTail++] = id;
+      if (p.burning || p.burn > 0) {
+        p.heat += dt;
+        ay += GRAVITY_BURN_EXTRA * burnAmt;
+        ax += Math.sin(p.seed + p.heat * 9) * 60 * burnAmt;
+      }
+
+      if (mouse.active) {
+        const dx = p.x - mouse.x, dy = p.y - mouse.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) + 0.001;
+        if (dist < PUSH_RADIUS) {
+          const falloff = 1 - dist / PUSH_RADIUS;
+          ax += (dx / dist) * PUSH_STRENGTH * falloff * falloff;
+          ay += (dy / dist) * PUSH_STRENGTH * falloff * falloff;
+        }
+      }
+
+      const vx = (p.x - p.oldX) * DAMPING;
+      const vy = (p.y - p.oldY) * DAMPING;
+      p.oldX = p.x; p.oldY = p.y;
+      p.x += vx + ax * dt * dt;
+      p.y += vy + ay * dt * dt;
+
+      if (p.y > HEIGHT + 80) {
+        p.destroyed = true;
+        spawnAshPuff(p.x, HEIGHT + 20);
       }
     }
-    while (qHead < qTail) {
-      const cur = bfsQueue[qHead++];
-      const ci = cur % (COLS + 1);
-      const cj = (cur / (COLS + 1)) | 0;
-      const nbs = [[ci - 1, cj], [ci + 1, cj], [ci, cj - 1], [ci, cj + 1]];
-      for (const [ni, nj] of nbs) {
-        if (ni < 0 || ni > COLS || nj < 0 || nj > ROWS) continue;
-        const nid = idx(ni, nj);
-        if (attachedBuf[nid]) continue;
-        const np = particles[nid];
-        if (np.destroyed || np.burn >= CUT_THRESHOLD) continue;
-        attachedBuf[nid] = 1;
-        bfsQueue[qTail++] = nid;
+  }
+
+  function satisfyConstraints() {
+    for (let iter = 0; iter < CONSTRAINT_ITERATIONS; iter++) {
+      for (let c = 0; c < constraints.length; c++) {
+        const con = constraints[c];
+        const pa = particles[con.a], pb = particles[con.b];
+        if (!linkIntact(pa, pb)) continue;
+
+        const dx = pb.x - pa.x, dy = pb.y - pa.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.0001;
+        const diff = (dist - con.restLen) / dist;
+        const stiffness = con.diagonal ? 0.5 : 1.0;
+
+        const movableA = !(pa.pinned && !pa.destroyed) ? 1 : 0;
+        const movableB = !(pb.pinned && !pb.destroyed) ? 1 : 0;
+        const total = movableA + movableB;
+        if (total === 0) continue;
+
+        const corrX = dx * diff * stiffness;
+        const corrY = dy * diff * stiffness;
+        if (movableA) { pa.x += corrX * (movableA / total); pa.y += corrY * (movableA / total); }
+        if (movableB) { pb.x -= corrX * (movableB / total); pb.y -= corrY * (movableB / total); }
       }
     }
   }
 
   function stepCloth(dt) {
-    dt = Math.min(dt, 1 / 30); // Clamp so a dropped frame doesn't launch the cloth into orbit
-
-    computeAttachment();
-
-    for (let j = 0; j <= ROWS; j++) {
-      for (let i = 0; i <= COLS; i++) {
-        const p = particles[idx(i, j)];
-        if (p.pinned) { p.x = p.restX; p.y = p.restY; p.vx = 0; p.vy = 0; continue; }
-        if (p.destroyed) continue;
-
-        const isAttached = attachedBuf[idx(i, j)] === 1;
-        const burnAmt = Math.min(p.burn, 1);
-
-        // Still attached: own fiber weakens as it individually burns.
-        // Cut off entirely: there's nothing structurally above it
-        // anymore, so it stops trying to spring back to its original
-        // position at all -- only gravity and its neighbours (also
-        // torn free) act on it from here, so the whole flap falls
-        // together instead of disintegrating into loose points.
-        const springScale = isAttached ? 1 - burnAmt * 0.9 : 0;
-        const sameSideScale = isAttached ? springScale : 0.6;
-
-        let fx = (p.restX - p.x) * SPRING_REST * springScale;
-        let fy = (p.restY - p.y) * SPRING_REST * springScale;
-
-        const neighbors = [[i - 1, j], [i + 1, j], [i, j - 1], [i, j + 1]];
-        for (const [ni, nj] of neighbors) {
-          if (ni < 0 || ni > COLS || nj < 0 || nj > ROWS) continue;
-          const nid = idx(ni, nj);
-          const n = particles[nid];
-          if (n.destroyed) continue;
-          // A torn thread carries no force in either direction -- once
-          // a neighbour ends up on the other side of the attachment
-          // boundary, there's nothing left connecting them. Without
-          // this, a still-attached neighbour keeps elastically tugging
-          // on the falling piece (and vice versa), which is what was
-          // making torn cloth hover instead of dropping cleanly.
-          if ((attachedBuf[nid] === 1) !== isAttached) continue;
-          fx += (n.x - p.x - (n.restX - p.restX)) * SPRING_NEIGH * sameSideScale;
-          fy += (n.y - p.y - (n.restY - p.restY)) * SPRING_NEIGH * sameSideScale;
-        }
-
-        if (mouse.active) {
-          const dx = p.x - mouse.x, dy = p.y - mouse.y;
-          const dist = Math.sqrt(dx * dx + dy * dy) + 0.001;
-          if (dist < PUSH_RADIUS) {
-            const falloff = 1 - dist / PUSH_RADIUS;
-            fx += (dx / dist) * PUSH_STRENGTH * falloff * falloff;
-            fy += (dy / dist) * PUSH_STRENGTH * falloff * falloff;
-          }
-        }
-
-        if (!isAttached) {
-          // Torn free -- true freefall, with a little flame shudder
-          // still playing if it happens to still be alight on the way down
-          fy += GRAVITY_FALL;
-          if (p.burning) {
-            p.heat += dt;
-            fx += Math.sin(p.seed + p.heat * 9) * 10 * burnAmt;
-          }
-        } else if (p.burning || p.burn > 0) {
-          p.heat += dt;
-          // Weakened fibers give in to gravity and start to sag, with
-          // a little flame-flicker shudder side to side as it goes
-          fy += GRAVITY_BURN * burnAmt;
-          fx += Math.sin(p.seed + p.heat * 9) * 10 * burnAmt;
-        }
-
-        p.vx = (p.vx + fx * dt) * DAMPING;
-        p.vy = (p.vy + fy * dt) * DAMPING;
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-
-        // Once a torn-free piece has fallen well past the bottom edge,
-        // it's off the "ground" and out of frame -- let it go
-        if (!isAttached && p.y > HEIGHT + 80) {
-          p.destroyed = true;
-          spawnAshPuff(p.x, HEIGHT + 20);
-        }
-      }
-    }
+    dt = Math.min(dt, 1 / 30);
+    verletIntegrate(dt);
+    satisfyConstraints();
 
     for (let j = 0; j <= ROWS; j++) {
       for (let i = 0; i <= COLS; i++) {
@@ -375,9 +384,6 @@
 
         p.burn += dt * (0.5 + Math.random() * 0.35);
 
-        // Once a point is decently caught, it has a shot at lighting
-        // its neighbours each frame -- keep the odds low or the whole
-        // sheet goes up in about half a second
         if (p.burn >= 0.35) {
           const neighbors = [[i - 1, j], [i + 1, j], [i, j - 1], [i, j + 1]];
           for (const [ni, nj] of neighbors) {
@@ -399,7 +405,146 @@
     }
   }
 
-  // Fire Particles:
+  // GPU mesh:
+  // A single PIXI.Mesh covering the whole cloth. Vertex positions and
+  // per-vertex burn amount are pushed to the GPU every frame; UVs are
+  // static (they just map each vertex back to its rest position in
+  // the source texture). The index buffer is rebuilt every frame too,
+  // but not to resize anything -- it's fixed-length and always
+  // COLS*ROWS*6 long. Cells that straddle a tear (their corners don't
+  // all share the same "attached" state, or one corner is destroyed)
+  // get written as a degenerate triangle (three copies of vertex 0),
+  // which the rasterizer treats as zero-area and simply doesn't draw.
+  // That's what produces the actual rip/hole instead of a smoothed-
+  // over seam, without ever touching buffer sizes.
+  let geometry = null, mesh = null;
+  let positions, uvs, burnArr, indices;
+  const glowPool = [];
+
+  const vertexSrc = `
+    attribute vec2 aVertexPosition;
+    attribute vec2 aTextureCoord;
+    attribute float aBurn;
+
+    uniform mat3 projectionMatrix;
+    uniform mat3 translationMatrix;
+
+    varying vec2 vTextureCoord;
+    varying float vBurn;
+
+    void main(void) {
+      gl_Position = vec4((projectionMatrix * translationMatrix * vec3(aVertexPosition, 1.0)).xy, 0.0, 1.0);
+      vTextureCoord = aTextureCoord;
+      vBurn = aBurn;
+    }
+  `;
+
+  const fragmentSrc = `
+    varying vec2 vTextureCoord;
+    varying float vBurn;
+
+    uniform sampler2D uSampler;
+    uniform vec4 uColor;
+
+    void main(void) {
+      vec4 texColor = texture2D(uSampler, vTextureCoord);
+      float t = clamp(vBurn, 0.0, 1.0);
+
+      // Char: darkens and browns out smoothly with burn amount --
+      // continuous across the whole mesh since it's a per-pixel
+      // shader value, so there's no triangle-edge seam to fight the
+      // way the old multiply-rect-per-triangle pass had to.
+      vec3 charColor = mix(vec3(0.35, 0.22, 0.14), vec3(0.05, 0.03, 0.02), smoothstep(0.15, 0.85, t));
+      float charMix = smoothstep(0.05, 0.85, t);
+      vec3 scorched = mix(texColor.rgb, texColor.rgb * charColor * 2.2, charMix);
+
+      // A thin band of ember glow right where a patch is actively
+      // burning through, before it's fully charred black.
+      float glow = smoothstep(0.35, 0.65, t) * (1.0 - smoothstep(0.65, 0.95, t));
+      vec3 emberColor = vec3(1.0, 0.5, 0.12);
+      vec3 finalColor = mix(scorched, emberColor, glow * 0.9);
+
+      gl_FragColor = vec4(finalColor, texColor.a) * uColor;
+    }
+  `;
+
+  function buildMeshObjects() {
+    const nVerts = (COLS + 1) * (ROWS + 1);
+    positions = new Float32Array(nVerts * 2);
+    uvs = new Float32Array(nVerts * 2);
+    burnArr = new Float32Array(nVerts);
+    indices = new Uint32Array(COLS * ROWS * 6);
+
+    for (let j = 0; j <= ROWS; j++) {
+      for (let i = 0; i <= COLS; i++) {
+        const id = idx(i, j);
+        const p = particles[id];
+        uvs[id * 2] = p.restX / WIDTH;
+        uvs[id * 2 + 1] = p.restY / HEIGHT;
+        positions[id * 2] = p.x;
+        positions[id * 2 + 1] = p.y;
+      }
+    }
+
+    geometry = new PIXI.Geometry()
+      .addAttribute('aVertexPosition', positions, 2)
+      .addAttribute('aTextureCoord', uvs, 2)
+      .addAttribute('aBurn', burnArr, 1)
+      .addIndex(indices);
+
+    const shader = PIXI.Shader.from(vertexSrc, fragmentSrc, {
+      uSampler: clothTexture,
+      uColor: new Float32Array([1, 1, 1, 1]),
+    });
+
+    if (mesh) { clothContainer.removeChild(mesh); mesh.destroy(); }
+    mesh = new PIXI.Mesh(geometry, shader);
+    clothContainer.addChild(mesh);
+  }
+
+  // A triangle renders only if every edge it's built from is still an
+  // intact structural/shear link -- exactly the same links (and the
+  // same linkIntact() test) the physics solver uses. The tear you see
+  // is always exactly the tear the solver is acting on; there's no
+  // separate "is this attached" concept left to disagree with it.
+  function rebuildMeshIndices() {
+    let n = 0;
+    for (let j = 0; j < ROWS; j++) {
+      for (let i = 0; i < COLS; i++) {
+        const v00 = idx(i, j), v10 = idx(i + 1, j), v01 = idx(i, j + 1), v11 = idx(i + 1, j + 1);
+        const p00 = particles[v00], p10 = particles[v10], p01 = particles[v01], p11 = particles[v11];
+
+        if (linkIntact(p00, p10) && linkIntact(p10, p11) && linkIntact(p00, p11)) {
+          indices[n++] = v00; indices[n++] = v10; indices[n++] = v11;
+        } else {
+          indices[n++] = 0; indices[n++] = 0; indices[n++] = 0;
+        }
+
+        if (linkIntact(p00, p11) && linkIntact(p11, p01) && linkIntact(p00, p01)) {
+          indices[n++] = v00; indices[n++] = v11; indices[n++] = v01;
+        } else {
+          indices[n++] = 0; indices[n++] = 0; indices[n++] = 0;
+        }
+      }
+    }
+  }
+
+  function updateMeshBuffers() {
+    for (let n = 0; n < particles.length; n++) {
+      const p = particles[n];
+      positions[n * 2] = p.x;
+      positions[n * 2 + 1] = p.y;
+      burnArr[n] = Math.min(p.burn, 1);
+    }
+    rebuildMeshIndices();
+
+    geometry.getBuffer('aVertexPosition').update(positions);
+    geometry.getBuffer('aBurn').update(burnArr);
+    geometry.indexBuffer.update(indices);
+  }
+
+  // Fire particles -- same spawn/update logic as before, just
+  // rendered as pooled GPU sprites instead of ctx.arc() calls.
   let flames = [];
   let embers = [];
   let smoke = [];
@@ -451,7 +596,6 @@
   }
 
   function updateFire(dt) {
-    // Burning points continually feed the particle pools
     for (const p of particles) {
       if (p.destroyed) continue;
       if (p.burning) {
@@ -474,358 +618,120 @@
       f.wobble += dt * 10;
       f.x += (f.vx + Math.sin(f.wobble) * 18) * dt;
       f.y += f.vy * dt;
-      f.vy *= 0.985; // Flames decelerate as they cool, not a real physical thing but reads right
+      f.vy *= 0.985;
     });
 
     stepList(embers, (e) => {
       e.x += e.vx * dt;
       e.y += e.vy * dt;
-      e.vy += 25 * dt; // Slight gravity pulls the dead ones back down
+      e.vy += 25 * dt;
       e.vx *= 0.99;
     });
 
     stepList(smoke, (s) => {
       s.x += (s.vx + Math.sin(s.life * 3 + s.x) * 6) * dt;
       s.y += s.vy * dt;
-      s.size += dt * 14; // Smoke puffs out as it rises
+      s.size += dt * 14;
     });
   }
 
-  function renderFire() {
-    // Soft glow first, underneath everything
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    for (const p of particles) {
-      if (p.destroyed || (!p.burning && p.burn <= 0)) continue;
+  // Soft radial-gradient sprite textures, generated once. These are
+  // what give flames/embers/smoke/glow their soft falloff on the GPU
+  // instead of a hard-edged circle.
+  function makeRadialTexture(size, stops) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const cctx = c.getContext('2d');
+    const g = cctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    for (const [off, col] of stops) g.addColorStop(off, col);
+    cctx.fillStyle = g;
+    cctx.fillRect(0, 0, size, size);
+    return PIXI.Texture.from(c);
+  }
+
+  const flameTex = makeRadialTexture(64, [
+    [0, 'rgba(255,244,214,1)'], [0.35, 'rgba(255,170,60,0.9)'],
+    [0.7, 'rgba(232,90,20,0.45)'], [1, 'rgba(232,90,20,0)'],
+  ]);
+  const emberTex = makeRadialTexture(32, [
+    [0, 'rgba(255,236,180,1)'], [0.4, 'rgba(255,150,40,0.95)'], [1, 'rgba(255,80,20,0)'],
+  ]);
+  const smokeTex = makeRadialTexture(64, [
+    [0, 'rgba(90,90,86,0.55)'], [0.6, 'rgba(90,90,86,0.28)'], [1, 'rgba(90,90,86,0)'],
+  ]);
+  const glowTex = makeRadialTexture(96, [
+    [0, 'rgba(255,200,120,0.55)'], [0.5, 'rgba(255,140,40,0.25)'], [1, 'rgba(255,140,40,0)'],
+  ]);
+
+  function makePool(container, texture, count, blend) {
+    const pool = [];
+    for (let k = 0; k < count; k++) {
+      const s = new PIXI.Sprite(texture);
+      s.anchor.set(0.5);
+      s.visible = false;
+      if (blend) s.blendMode = PIXI.BLEND_MODES.ADD;
+      container.addChild(s);
+      pool.push(s);
+    }
+    return pool;
+  }
+
+  const flamePool = makePool(flameContainerObj, flameTex, MAX_FLAMES + 10, true);
+  const emberPool = makePool(emberContainerObj, emberTex, MAX_EMBERS + 10, true);
+  const smokePool = makePool(smokeContainerObj, smokeTex, MAX_SMOKE + 10, false);
+
+  // Rebuilt whenever the grid resolution or canvas size changes,
+  // since it needs exactly one sprite per grid particle.
+  function rebuildGlowPool() {
+    for (const s of glowPool) { glowContainerObj.removeChild(s); s.destroy(); }
+    glowPool.length = 0;
+    for (let n = 0; n < particles.length; n++) {
+      const s = new PIXI.Sprite(glowTex);
+      s.anchor.set(0.5);
+      s.blendMode = PIXI.BLEND_MODES.ADD;
+      s.visible = false;
+      glowContainerObj.addChild(s);
+      glowPool.push(s);
+    }
+  }
+
+  function updateFireSprites() {
+    for (let n = 0; n < particles.length; n++) {
+      const p = particles[n];
+      const s = glowPool[n];
+      if (!s) continue;
+      if (p.destroyed || (!p.burning && p.burn <= 0)) { s.visible = false; continue; }
       const intensity = Math.min(p.burn, 1);
-      const r = 46 + intensity * 20;
-      const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
-      grad.addColorStop(0, `rgba(255,150,40,${0.14 * intensity})`);
-      grad.addColorStop(1, 'rgba(255,120,20,0)');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-      ctx.fill();
+      s.visible = true;
+      s.x = p.x; s.y = p.y;
+      const sizePx = 60 + intensity * 70;
+      s.width = sizePx; s.height = sizePx;
+      s.alpha = 0.35 + intensity * 0.4;
     }
-    ctx.restore();
 
-    // Flame licks
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    for (const f of flames) {
-      const t = f.life / f.maxLife; // 0 = just born, 1 = about to die
-      const size = f.size * (1 - t * 0.8);
-      if (size <= 0) continue;
-      const grad = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, size);
-      if (t < 0.3) {
-        grad.addColorStop(0, 'rgba(255,250,220,0.9)');
-        grad.addColorStop(0.5, 'rgba(255,200,60,0.7)');
-        grad.addColorStop(1, 'rgba(255,120,20,0)');
-      } else {
-        grad.addColorStop(0, `rgba(255,160,40,${0.75 * (1 - t)})`);
-        grad.addColorStop(0.6, `rgba(230,70,20,${0.45 * (1 - t)})`);
-        grad.addColorStop(1, 'rgba(180,30,10,0)');
-      }
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(f.x, f.y, size, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-
-    // Embers -- tiny bright dots
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    for (const e of embers) {
-      const t = e.life / e.maxLife;
-      const twinkle = 0.5 + 0.5 * Math.sin(e.life * 24 + e.flicker);
-      ctx.fillStyle = `rgba(255,${140 + twinkle * 80},${40 + twinkle * 40},${(1 - t) * 0.9})`;
-      ctx.beginPath();
-      ctx.arc(e.x, e.y, e.size, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-
-    // Smoke on top, normal blending so it actually darkens/obscures
-    // rather than glowing like the flame layers
-    ctx.save();
-    for (const s of smoke) {
-      const t = s.life / s.maxLife;
-      const alpha = (1 - t) * 0.16;
-      const grad = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.size);
-      grad.addColorStop(0, `rgba(40,36,32,${alpha})`);
-      grad.addColorStop(1, 'rgba(40,36,32,0)');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-  }
-
-  // Mesh -> image warp:
-  // Maps a triangle of (u,v) texture coords onto a triangle of (x,y)
-  // screen coords using a plain affine transform. This is the
-  // textbook 3-point solution, not something I derived myself.
-  function drawTri(x0, y0, x1, y1, x2, y2, u0, v0, u1, v1, u2, v2, burnAvg) {
-    const denom = u0 * (v1 - v2) + u1 * (v2 - v0) + u2 * (v0 - v1);
-    if (Math.abs(denom) < 1e-6) return; // Degenerate triangle, skip it
-
-    const a = (x0 * (v1 - v2) + x1 * (v2 - v0) + x2 * (v0 - v1)) / denom;
-    const b = (y0 * (v1 - v2) + y1 * (v2 - v0) + y2 * (v0 - v1)) / denom;
-    const c = (x0 * (u2 - u1) + x1 * (u0 - u2) + x2 * (u1 - u0)) / denom;
-    const d = (y0 * (u2 - u1) + y1 * (u0 - u2) + y2 * (u1 - u0)) / denom;
-    const e = (x0 * (u1 * v2 - u2 * v1) + x1 * (u2 * v0 - u0 * v2) + x2 * (u0 * v1 - u1 * v0)) / denom;
-    const f = (y0 * (u1 * v2 - u2 * v1) + y1 * (u2 * v0 - u0 * v2) + y2 * (u0 * v1 - u1 * v0)) / denom;
-
-    // Only the bit of the source image this triangle actually needs
-    const pad = 1;
-    const sx = Math.max(0, Math.min(u0, u1, u2) - pad);
-    const sy = Math.max(0, Math.min(v0, v1, v2) - pad);
-    const sw = Math.min(WIDTH, Math.max(u0, u1, u2) + pad) - sx;
-    const sh = Math.min(HEIGHT, Math.max(v0, v1, v2) + pad) - sy;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.lineTo(x2, y2); ctx.closePath();
-    ctx.clip();
-    ctx.setTransform(a, b, c, d, e, f);
-    ctx.drawImage(texCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
-
-    // Char/scorch pass, same clip so this doesn't cost a second
-    // save/clip. kept subtle and multiplied in instead of painted flat
-    // on top, otherwise every triangle edge shows up as a visible seam
-    // (this was the "looks like a grid" problem)
-    if (burnAvg > 0.15) {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      const t = Math.min(burnAvg, 1);
-      ctx.globalCompositeOperation = 'multiply';
-      const darkness = Math.min((t - 0.15) / 0.85, 1);
-      ctx.fillStyle = `rgba(${60 - darkness * 45},${40 - darkness * 32},${28 - darkness * 24},${0.25 + darkness * 0.55})`;
-      ctx.fillRect(0, 0, WIDTH, HEIGHT);
-    }
-    ctx.restore();
-  }
-
-  // Smoothed render mesh:
-  // the physics above only ever runs on the coarse spring grid -- has
-  // to, that's what keeps it cheap enough to shove around with a
-  // mouse in real time. But drawing that grid straight is what makes
-  // the cloth look faceted/low-poly, especially on "coarse". So
-  // instead of feeding particle positions straight to drawTri, we fit
-  // a bicubic surface through the coarse grid and re-sample it at
-  // SUB times the resolution, and draw that instead. Still just the
-  // one spring simulation underneath -- this part never touches
-  // velocities or forces, it only ever reads finished positions.
-  //
-  // The interpolation itself is Catmull-Rom, done the standard
-  // separable way: interpolate along rows first, then interpolate
-  // those results down a column. Four points in, one point out, in
-  // both passes -- nothing fancier than that.
-  function catmullRom(p0, p1, p2, p3, t) {
-    const t2 = t * t, t3 = t2 * t;
-    return 0.5 * (
-      (2 * p1) +
-      (-p0 + p2) * t +
-      (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
-      (-p0 + 3 * p1 - 3 * p2 + p3) * t3
-    );
-  }
-
-  // Clamps a coarse grid index back onto the real column/row range --
-  // used a lot below, kept as one-liners rather than a helper function
-  // since this is hot-path code and a function call per lookup adds
-  // up once you're doing it thousands of times a frame
-  function clampCol(i) { return i < 0 ? 0 : (i > COLS ? COLS : i); }
-  function clampRow(j) { return j < 0 ? 0 : (j > ROWS ? ROWS : j); }
-
-  // Fine-mesh scratch buffers. Typed arrays, allocated once per
-  // density/canvas change and just overwritten every frame after
-  // that -- this whole mesh gets rebuilt 60 times a second, so
-  // there's no handing the GC a fresh batch of arrays every frame.
-  //
-  // rowTmp* holds the in-between state: each real physics row, already
-  // stretched out horizontally to fine resolution, but not yet blended
-  // vertically. One array per field, (ROWS+1) rows of (fineCols+1)
-  // values each.
-  let fineCols = 0, fineRows = 0;
-  let fineX, fineY, fineU, fineV, fineBurn, fineAlive;
-  let rowTmpX, rowTmpY, rowTmpBurn, rowTmpAlive;
-
-  function allocFineBuffers() {
-    fineCols = COLS * SUB;
-    fineRows = ROWS * SUB;
-    const n = (fineCols + 1) * (fineRows + 1);
-    fineX = new Float32Array(n);
-    fineY = new Float32Array(n);
-    fineU = new Float32Array(n);
-    fineV = new Float32Array(n);
-    fineBurn = new Float32Array(n);
-    fineAlive = new Float32Array(n);
-
-    const rowN = (ROWS + 1) * (fineCols + 1);
-    rowTmpX = new Float32Array(rowN);
-    rowTmpY = new Float32Array(rowN);
-    rowTmpBurn = new Float32Array(rowN);
-    rowTmpAlive = new Float32Array(rowN);
-  }
-
-  function fineIdx(i, j) { return j * (fineCols + 1) + i; }
-  function rowTmpIdx(i, j) { return j * (fineCols + 1) + i; } // j here is a *coarse* row
-
-  // Coarse-grid attachment lookup, clamped to the real grid range --
-  // used below to keep the smoothed render mesh from blending across
-  // a tear (which is what caused the stretched/elongated triangles)
-  function attachedAt(ci, cj) {
-    return attachedBuf[idx(clampCol(ci), clampRow(cj))] === 1;
-  }
-
-  // Builds the render mesh from the current particle positions. Two
-  // passes, same idea the comment above describes: stretch every
-  // coarse row out to fine resolution first (horizontal pass), then
-  // blend those stretched rows down into fine rows (vertical pass).
-  // Each physics cell's four control points get fetched once and
-  // reused for all SUB in-between samples, rather than re-deriving
-  // them from scratch per output pixel like a naive per-vertex
-  // sampler would -- that was the first draft of this, and it spent
-  // more time re-walking the particle grid than actually blending it.
-  function buildFineMesh() {
-    const rect = clothRect();
-    const spx = rect.w / COLS, spy = rect.h / ROWS;
-
-    // Pass 1: horizontal, one real row at a time
-    for (let j = 0; j <= ROWS; j++) {
-      for (let i = 0; i < COLS; i++) {
-        let ia = clampCol(i - 1), ib = i, ic = clampCol(i + 1), id = clampCol(i + 2);
-
-        // A cell whose two real endpoints sit on opposite sides of the
-        // attachment boundary IS the tear -- it never renders, which
-        // is what leaves a visible gap/rip instead of a smoothed-over
-        // seam. The outer control points (ia/id) also get pulled back
-        // to their nearer real endpoint whenever THEY cross a tear, so
-        // a cell one step away from the boundary doesn't have its
-        // curve dragged toward a wildly displaced disconnected patch.
-        const attB = attachedAt(ib, j), attC = attachedAt(ic, j);
-        const torn = attB !== attC;
-        if (attachedAt(ia, j) !== attB) ia = ib;
-        if (attachedAt(id, j) !== attC) id = ic;
-
-        const pa = particles[idx(ia, j)], pb = particles[idx(ib, j)];
-        const pc = particles[idx(ic, j)], pd = particles[idx(id, j)];
-        const ba = pa.destroyed ? 0 : 1, bb = pb.destroyed ? 0 : 1;
-        const bc = pc.destroyed ? 0 : 1, bd = pd.destroyed ? 0 : 1;
-
-        for (let k = 0; k < SUB; k++) {
-          const t = k / SUB;
-          const n = rowTmpIdx(i * SUB + k, j);
-          rowTmpX[n] = catmullRom(pa.x, pb.x, pc.x, pd.x, t);
-          rowTmpY[n] = catmullRom(pa.y, pb.y, pc.y, pd.y, t);
-          rowTmpBurn[n] = catmullRom(pa.burn, pb.burn, pc.burn, pd.burn, t);
-          rowTmpAlive[n] = torn ? 0 : catmullRom(ba, bb, bc, bd, t);
+    const applyPool = (pool, list, tintFn, sizeFn) => {
+      for (let k = 0; k < pool.length; k++) {
+        const s = pool[k];
+        if (k < list.length) {
+          const it = list[k];
+          const lifeT = it.life / it.maxLife;
+          s.visible = true;
+          s.x = it.x; s.y = it.y;
+          const sz = sizeFn(it, lifeT);
+          s.width = sz; s.height = sz;
+          s.alpha = Math.max(0, 1 - lifeT);
+          s.tint = tintFn(it, lifeT);
+        } else {
+          s.visible = false;
         }
       }
-      // Right edge of the cloth -- not covered by the loop above since
-      // it only walks whole cells, so the very last fine column of
-      // each row is just the real edge particle, exactly
-      const p = particles[idx(COLS, j)];
-      const n = rowTmpIdx(fineCols, j);
-      rowTmpX[n] = p.x; rowTmpY[n] = p.y; rowTmpBurn[n] = p.burn;
-      rowTmpAlive[n] = p.destroyed ? 0 : 1;
-    }
+    };
 
-    // Pass 2: vertical, blending the stretched rows together
-    for (let i = 0; i <= fineCols; i++) {
-      const u = i / SUB;
-      const uPix = rect.x + u * spx;
-      const coarseCol = Math.round(u); // nearest real column, for attachment lookups only
-      for (let j = 0; j < ROWS; j++) {
-        let ja = clampRow(j - 1), jb = j, jc = clampRow(j + 1), jd = clampRow(j + 2);
-
-        // Same idea as Pass 1: a cell straddling the attachment
-        // boundary vertically is the tear itself (never rendered),
-        // and the outer control points get pulled back to their
-        // nearer real endpoint if they'd otherwise reach across it
-        const attB = attachedAt(coarseCol, jb), attC = attachedAt(coarseCol, jc);
-        const torn = attB !== attC;
-        if (attachedAt(coarseCol, ja) !== attB) ja = jb;
-        if (attachedAt(coarseCol, jd) !== attC) jd = jc;
-
-        const xa = rowTmpX[rowTmpIdx(i, ja)], xb = rowTmpX[rowTmpIdx(i, jb)];
-        const xc = rowTmpX[rowTmpIdx(i, jc)], xd = rowTmpX[rowTmpIdx(i, jd)];
-        const ya = rowTmpY[rowTmpIdx(i, ja)], yb = rowTmpY[rowTmpIdx(i, jb)];
-        const yc = rowTmpY[rowTmpIdx(i, jc)], yd = rowTmpY[rowTmpIdx(i, jd)];
-        const bua = rowTmpBurn[rowTmpIdx(i, ja)], bub = rowTmpBurn[rowTmpIdx(i, jb)];
-        const buc = rowTmpBurn[rowTmpIdx(i, jc)], bud = rowTmpBurn[rowTmpIdx(i, jd)];
-        const ala = rowTmpAlive[rowTmpIdx(i, ja)], alb = rowTmpAlive[rowTmpIdx(i, jb)];
-        const alc = rowTmpAlive[rowTmpIdx(i, jc)], ald = rowTmpAlive[rowTmpIdx(i, jd)];
-
-        for (let k = 0; k < SUB; k++) {
-          const t = k / SUB;
-          const n = fineIdx(i, j * SUB + k);
-          fineX[n] = catmullRom(xa, xb, xc, xd, t);
-          fineY[n] = catmullRom(ya, yb, yc, yd, t);
-
-          // Burn/alive are step-ish fields and Catmull-Rom will happily
-          // overshoot past 0/1 chasing a sharp edge -- clamped so we
-          // don't get a scorch darker than "fully burned" or a hole
-          // with negative alpha weirdness
-          fineBurn[n] = Math.max(0, Math.min(1, catmullRom(bua, bub, buc, bud, t)));
-          fineAlive[n] = torn ? 0 : Math.max(0, Math.min(1, catmullRom(ala, alb, alc, ald, t)));
-          fineU[n] = uPix;
-          fineV[n] = rect.y + (j * SUB + k) / SUB * spy;
-        }
-      }
-      // Bottom edge, same reasoning as the row loop's right edge above
-      const n = fineIdx(i, fineRows);
-      fineX[n] = rowTmpX[rowTmpIdx(i, ROWS)];
-      fineY[n] = rowTmpY[rowTmpIdx(i, ROWS)];
-      fineBurn[n] = rowTmpBurn[rowTmpIdx(i, ROWS)];
-      fineAlive[n] = rowTmpAlive[rowTmpIdx(i, ROWS)];
-      fineU[n] = uPix;
-      fineV[n] = rect.y + rect.h;
-    }
-  }
-
-  function render() {
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, WIDTH, HEIGHT);
-
-    // Pure white now instead of the old near-black -- this is what
-    // shows in the gap around the cloth, and whatever's left exposed
-    // once a patch has burned all the way through
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, WIDTH, HEIGHT);
-
-    buildFineMesh();
-
-    // A fine vertex counts as "gone" once its interpolated alive
-    // value dips under half -- gives the burnt-through edge a curve
-    // to follow instead of the coarse grid's blocky staircase
-    const ALIVE_CUTOFF = 0.5;
-
-    for (let j = 0; j < fineRows; j++) {
-      for (let i = 0; i < fineCols; i++) {
-        const i00 = fineIdx(i, j), i10 = fineIdx(i + 1, j);
-        const i01 = fineIdx(i, j + 1), i11 = fineIdx(i + 1, j + 1);
-
-        const dead1 = fineAlive[i00] < ALIVE_CUTOFF || fineAlive[i10] < ALIVE_CUTOFF || fineAlive[i11] < ALIVE_CUTOFF;
-        const dead2 = fineAlive[i00] < ALIVE_CUTOFF || fineAlive[i11] < ALIVE_CUTOFF || fineAlive[i01] < ALIVE_CUTOFF;
-
-        if (!dead1) {
-          const avg1 = (fineBurn[i00] + fineBurn[i10] + fineBurn[i11]) / 3;
-          drawTri(fineX[i00], fineY[i00], fineX[i10], fineY[i10], fineX[i11], fineY[i11],
-            fineU[i00], fineV[i00], fineU[i10], fineV[i10], fineU[i11], fineV[i11], avg1);
-        }
-        if (!dead2) {
-          const avg2 = (fineBurn[i00] + fineBurn[i11] + fineBurn[i01]) / 3;
-          drawTri(fineX[i00], fineY[i00], fineX[i11], fineY[i11], fineX[i01], fineY[i01],
-            fineU[i00], fineV[i00], fineU[i11], fineV[i11], fineU[i01], fineV[i01], avg2);
-        }
-      }
-    }
-
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    renderFire();
+    applyPool(flamePool, flames,
+      (f, t) => (t < 0.4 ? 0xfff2c0 : (t < 0.75 ? 0xffa53a : 0xe8551a)),
+      (f, t) => f.size * (1.15 - 0.3 * t) * 2);
+    applyPool(emberPool, embers, () => 0xffcf7a, (e) => e.size * 5);
+    applyPool(smokePool, smoke, () => 0x5a5a56, (s) => s.size * 1.6);
   }
 
   // Input
@@ -848,8 +754,6 @@
   }, { passive: false });
 
   function ignite(pos) {
-    // Brute force nearest-particle search. Grid is small enough
-    // (a few hundred points) that this is not worth optimizing
     let best = null, bestD = Infinity;
     for (const p of particles) {
       if (p.destroyed) continue;
@@ -911,15 +815,11 @@
   });
 
   document.getElementById('applySizeBtn').addEventListener('click', () => {
-    // Typing in your own numbers counts as "custom", so no preset
-    // should look selected anymore
     setActivePreset(null);
     applyCanvasSize(parseInt(widthInput.value, 10), parseInt(heightInput.value, 10));
   });
 
   // Main loop:
-  // No preset gets marked active by default -- the starting canvas is
-  // the plain 600x600 default
   fitStage();
   drawPlaceholderTexture();
   resetCloth(true);
@@ -930,7 +830,9 @@
     last = now;
     stepCloth(dt);
     updateFire(dt);
-    render();
+    updateMeshBuffers();
+    updateFireSprites();
+    app.renderer.render(app.stage);
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
