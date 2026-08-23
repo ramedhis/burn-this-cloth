@@ -206,9 +206,16 @@
   const clothContainer = new PIXI.Container();
   const smokeContainerObj = new PIXI.Container();
   const glowContainerObj = new PIXI.Container();
+  // Sits inside worldRoot (unlike bloomContainer above, which is
+  // screen-space) so it automatically rides the same camera transform
+  // as the cloth -- coordinates go in as plain cloth-space x/y, no
+  // origin/scale conversion needed. Same cluster data as the backdrop
+  // bloom, just applied directly over nearby fabric instead of the
+  // wall behind it.
+  const clothBloomContainer = new PIXI.Container();
   const emberContainerObj = new PIXI.Container();
   const flameContainerObj = new PIXI.Container();
-  worldRoot.addChild(clothContainer, smokeContainerObj, glowContainerObj, emberContainerObj, flameContainerObj);
+  worldRoot.addChild(clothContainer, smokeContainerObj, glowContainerObj, clothBloomContainer, emberContainerObj, flameContainerObj);
   app.stage.addChild(bgContainer, scorchContainer, bloomContainer, worldRoot);
 
   // Grid resolution now drives BOTH physics and the render mesh --
@@ -494,6 +501,7 @@
           destroyed: false,
           scorched: false,
           heat: 0,
+          heatGlow: 0,
           destroyAt: 0.82 + Math.random() * 0.35,
           seed: Math.random() * 1000,
         });
@@ -719,12 +727,57 @@
     }
   }
 
+  // Right now cloth is either burning (and showing it) or completely
+  // untouched, with nothing in between -- a vertex two cells away from
+  // an active flame looks exactly as pristine as one on the far
+  // corner of the sheet, right up until the ignite-chain in stepCloth
+  // below actually reaches it. heatGlow is a cheap, approximate
+  // diffusion (not a real heat equation, just neighbor-averaging) that
+  // gives fabric a warm pre-char discoloration bleeding outward from
+  // wherever's actively burning, so a patch visibly warms before it
+  // catches instead of catching with no warning at all.
+  const HEAT_SOURCE_GAIN = 1.0;  // How strongly an actively burning vertex radiates
+  const HEAT_DIFFUSE = 0.5;      // How much of a neighbor's heat bleeds through per frame
+  const HEAT_RESPONSE = 4.5;     // How fast a vertex's own glow chases its diffusion target
+  const HEAT_DECAY = 0.35;       // Per-second fade once nothing nearby is still feeding it
+
+  function updateHeatGlow(dt) {
+    for (let j = 0; j <= ROWS; j++) {
+      for (let i = 0; i <= COLS; i++) {
+        const p = particles[idx(i, j)];
+        if (p.destroyed) continue;
+
+        const source = p.burning ? Math.min(p.burn, 1) * HEAT_SOURCE_GAIN : 0;
+
+        // Reads neighbors' heatGlow from last frame (this is a single-
+        // pass approximation, not a properly solved diffusion -- a
+        // real one would need a double buffer to avoid directional
+        // bias, but for a stylized "warmth is spreading" read this is
+        // plenty and a lot cheaper).
+        let neighborSum = 0, neighborCount = 0;
+        const left = i > 0 ? particles[idx(i - 1, j)] : null;
+        const right = i < COLS ? particles[idx(i + 1, j)] : null;
+        const up = j > 0 ? particles[idx(i, j - 1)] : null;
+        const down = j < ROWS ? particles[idx(i, j + 1)] : null;
+        for (const n of [left, right, up, down]) {
+          if (n && !n.destroyed) { neighborSum += n.heatGlow; neighborCount++; }
+        }
+        const bled = neighborCount ? (neighborSum / neighborCount) * HEAT_DIFFUSE : 0;
+
+        const target = Math.max(source, bled);
+        p.heatGlow += (target - p.heatGlow) * Math.min(1, HEAT_RESPONSE * dt);
+        p.heatGlow = Math.max(0, p.heatGlow - HEAT_DECAY * dt);
+      }
+    }
+  }
+
   function stepCloth(dt) {
     dt = Math.min(dt, 1 / 30);
     simTime += dt;
     updateMouseVelocity(dt);
     verletIntegrate(dt);
     satisfyConstraints();
+    updateHeatGlow(dt);
 
     for (let j = 0; j <= ROWS; j++) {
       for (let i = 0; i <= COLS; i++) {
@@ -783,7 +836,7 @@
   // That's what produces the actual rip/hole instead of a smoothed-
   // over seam, without ever touching buffer sizes.
   let geometry = null, mesh = null;
-  let positions, uvs, burnArr, shadeArr, indices;
+  let positions, uvs, burnArr, shadeArr, heatArr, indices;
   const glowPool = [];
 
   // Fake lighting for the fold shading below. There's no real z on
@@ -865,6 +918,36 @@
     return sign * Math.pow(Math.min(Math.abs(raw), 1), 0.55);
   }
 
+  // Ambient heat bleed for the pre-scorch glow (feeds the fragment
+  // shader's vHeatGlow/preheat block below). Purely visual -- doesn't
+  // touch the actual physics or a vertex's own burn value at all, it
+  // just looks a couple of grid cells out and reports how hot the
+  // hottest nearby thing currently is, decayed by distance. A vertex
+  // sitting right next to a fully-burning neighbor reads almost as hot
+  // as that neighbor; another ring out and it fades fast, so this
+  // reads as "the fire is right next to this specific patch" rather
+  // than smearing a uniform warm wash across the whole sheet.
+  const HEAT_RADIUS = 2; // how many grid cells out the glow reaches
+  function vertexHeat(i, j) {
+    const p = particles[idx(i, j)];
+    if (p.destroyed) return 0;
+    let best = 0;
+    for (let dj = -HEAT_RADIUS; dj <= HEAT_RADIUS; dj++) {
+      for (let di = -HEAT_RADIUS; di <= HEAT_RADIUS; di++) {
+        if (di === 0 && dj === 0) continue;
+        const ni = i + di, nj = j + dj;
+        if (ni < 0 || ni > COLS || nj < 0 || nj > ROWS) continue;
+        const n = particles[idx(ni, nj)];
+        if (n.destroyed) continue;
+        const dist = Math.max(Math.abs(di), Math.abs(dj));
+        const falloff = 1 - (dist - 1) / HEAT_RADIUS; // immediate neighbor (dist=1) sits closest to full strength
+        const contribution = Math.min(n.burn, 1) * falloff;
+        if (contribution > best) best = contribution;
+      }
+    }
+    return best;
+  }
+
   // wireframe overlay, just the structural links -- reuses linkIntact
   // so the lines drop out exactly where the cloth actually tears instead
   // of keeping their own separate idea of what's still connected
@@ -890,6 +973,7 @@
     attribute vec2 aTextureCoord;
     attribute float aBurn;
     attribute float aShade;
+    attribute float aHeatGlow;
 
     uniform mat3 projectionMatrix;
     uniform mat3 translationMatrix;
@@ -897,12 +981,14 @@
     varying vec2 vTextureCoord;
     varying float vBurn;
     varying float vShade;
+    varying float vHeatGlow;
 
     void main(void) {
       gl_Position = vec4((projectionMatrix * translationMatrix * vec3(aVertexPosition, 1.0)).xy, 0.0, 1.0);
       vTextureCoord = aTextureCoord;
       vBurn = aBurn;
       vShade = aShade;
+      vHeatGlow = aHeatGlow;
     }
   `;
 
@@ -910,6 +996,7 @@
     varying vec2 vTextureCoord;
     varying float vBurn;
     varying float vShade;
+    varying float vHeatGlow;
 
     uniform sampler2D uSampler;
     uniform vec4 uColor;
@@ -946,6 +1033,18 @@
       // draped fabric" and not "this is a flat poster".
       float shade = clamp(vShade, -1.0, 1.0);
       vec3 lit = clamp(fabricColor * (1.0 + shade * 0.85), 0.0, 1.0);
+
+      // Ambient heat bleeding in from nearby active fire, entirely
+      // separate from this vertex's own char band below -- this is
+      // what lets a patch of cloth two or three cells from a flame
+      // visibly warm and darken before it's ever actually burning
+      // itself, instead of staying perfectly untouched right up until
+      // the instant it catches. Fades out fast once real burning
+      // starts here (the (1.0 - t-based term)) so it hands off to the
+      // char band instead of doubling up with it.
+      float preheat = clamp(vHeatGlow, 0.0, 1.0) * (1.0 - smoothstep(0.0, 0.3, t));
+      vec3 preheatColor = vec3(0.24, 0.09, 0.03);
+      lit = mix(lit, preheatColor, preheat * 0.5);
 
       // Char: fabric burns down toward near-black charcoal well
       // before the hole opens -- this is the "already burnt, cooling"
@@ -998,6 +1097,7 @@
     uvs = new Float32Array(nVerts * 2);
     burnArr = new Float32Array(nVerts);
     shadeArr = new Float32Array(nVerts);
+    heatArr = new Float32Array(nVerts);
     indices = new Uint32Array(COLS * ROWS * 6);
 
     for (let j = 0; j <= ROWS; j++) {
@@ -1016,6 +1116,7 @@
       .addAttribute('aTextureCoord', uvs, 2)
       .addAttribute('aBurn', burnArr, 1)
       .addAttribute('aShade', shadeArr, 1)
+      .addAttribute('aHeatGlow', heatArr, 1)
       .addIndex(indices);
 
     const shader = PIXI.Shader.from(vertexSrc, fragmentSrc, {
@@ -1084,15 +1185,18 @@
       burnArr[n] = Math.min(p.burn, 1);
 
       // n walks the same j-outer, i-inner order buildGrid() filled
-      // particles in, so this recovers the (i,j) vertexShade wants
-      // without needing a second lookup table.
-      shadeArr[n] = vertexShade(n % rowLen, (n / rowLen) | 0);
+      // particles in, so this recovers the (i,j) vertexShade/vertexHeat
+      // want without needing a second lookup table.
+      const gi = n % rowLen, gj = (n / rowLen) | 0;
+      shadeArr[n] = vertexShade(gi, gj);
+      heatArr[n] = vertexHeat(gi, gj);
     }
     rebuildMeshIndices();
 
     geometry.getBuffer('aVertexPosition').update(positions);
     geometry.getBuffer('aBurn').update(burnArr);
     geometry.getBuffer('aShade').update(shadeArr);
+    geometry.getBuffer('aHeatGlow').update(heatArr);
     geometry.indexBuffer.update(indices);
   }
 
@@ -1333,6 +1437,15 @@
   // bgContainer -- see updateBloom() below for how they're placed.
   const MAX_BLOOM_LIGHTS = 18;
   const bloomPool = makePool(bloomContainer, bloomTex, MAX_BLOOM_LIGHTS, true);
+  // Same cluster data, second pool -- clothBloomContainer lives inside
+  // worldRoot, so these get positioned directly in cloth-space and the
+  // camera transform does the rest. This is what washes the fire's
+  // light across nearby UNBURNT fabric, not just the backdrop behind
+  // it -- without it, the fire only ever affects the exact pixels
+  // that are already on fire (via glowPool) or the wall behind the
+  // cloth (via bloomPool), and the rest of the fabric stays totally
+  // unaware a fire is happening a few inches away.
+  const fabricBloomPool = makePool(clothBloomContainer, bloomTex, MAX_BLOOM_LIGHTS, true);
 
   // Rebuilt whenever the grid resolution or canvas size changes,
   // since it needs exactly one sprite per grid particle.
@@ -1493,6 +1606,29 @@
       s.width = sizePx; s.height = sizePx;
       const flicker = 0.85 + Math.sin(simTime * 13 + b * 7) * 0.15;
       s.alpha = Math.min(1, 0.5 + w * 0.05) * flicker;
+    }
+
+    // Same clusters, but placed straight in cloth-space (no
+    // origin/clothScale conversion needed -- clothBloomContainer sits
+    // inside worldRoot, which already applies that transform to
+    // everything in it). Bigger and much dimmer than the backdrop
+    // version: this is meant to read as "the fire nearby is warming
+    // this fabric a little," not as its own light source competing
+    // with the actual char/ember shader right at the burn front.
+    for (let k = 0; k < fabricBloomPool.length; k++) {
+      const s = fabricBloomPool[k];
+      if (k >= bloomOrder.length) { s.visible = false; continue; }
+      const b = bloomOrder[k];
+      const w = bloomWeight[b];
+      const cx = bloomSumX[b] / w;
+      const cy = bloomSumY[b] / w;
+
+      s.visible = true;
+      s.x = cx; s.y = cy;
+      const sizePx = (260 + w * 50) * fireScale();
+      s.width = sizePx; s.height = sizePx;
+      const flicker = 0.85 + Math.sin(simTime * 11 + b * 5) * 0.15;
+      s.alpha = Math.min(0.4, 0.16 + w * 0.02) * flicker;
     }
   }
 
