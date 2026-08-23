@@ -1,5 +1,4 @@
   :root{
-    /* black on black, basically -- text stays grey/white, nothing else gets a color */
     --bg: #000000;
     --panel: #0c0c0c;
     --line: #2b2b2b;
@@ -234,3 +233,21 @@
   }
 
   input[type=file] { display: none; }
+
+  /* Same look as .preset-group/.preset-btn, kept separate so the
+     canvas-size preset JS (which queries .preset-btn globally)
+     never sees these */
+  .anchor-group {
+    display: flex;
+    border: 1px solid var(--line);
+    overflow: hidden;
+  }
+
+  .anchor-btn {
+    flex: 1 1 0;
+    border: none;
+    border-right: 1px solid var(--line);
+  }
+
+  .anchor-btn:last-child { border-right: none; }
+  .anchor-btn.active { background: var(--ink); color: #000; }

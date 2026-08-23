@@ -275,6 +275,25 @@
     return Math.max(pa.burn, pb.burn) < CUT_THRESHOLD;
   }
 
+  // Which grid points are pinned in place, picked from the panel
+  let anchorMode = 'edge';
+  function isPinned(i, j) {
+    if (anchorMode === 'three') {
+      if (j !== 0) return false;
+      const mid = Math.round(COLS / 2);
+      return i === 0 || i === COLS || i === mid;
+    }
+    if (anchorMode === 'eight') {
+      const midCol = Math.round(COLS / 2);
+      const midRow = Math.round(ROWS / 2);
+      const corner = (i === 0 || i === COLS) && (j === 0 || j === ROWS);
+      const topBottomMid = (j === 0 || j === ROWS) && i === midCol;
+      const leftRightMid = (i === 0 || i === COLS) && j === midRow;
+      return corner || topBottomMid || leftRightMid;
+    }
+    return j === 0;
+  }
+
   function buildGrid() {
     COLS = densities[densityIdx].c;
     ROWS = densities[densityIdx].r;
@@ -286,7 +305,7 @@
     for (let j = 0; j <= ROWS; j++) {
       for (let i = 0; i <= COLS; i++) {
         const rx = rect.x + i * spx, ry = rect.y + j * spy;
-        const pinned = j === 0; // Whole top edge anchored, curtain-rod style
+        const pinned = isPinned(i, j);
         particles.push({
           x: rx, y: ry, oldX: rx, oldY: ry, restX: rx, restY: ry,
           pinned,
@@ -1208,6 +1227,15 @@
     densityIdx = (densityIdx + 1) % densities.length;
     e.target.textContent = 'Density: ' + densities[densityIdx].label;
     resetCloth(true);
+  });
+
+  const anchorBtns = document.querySelectorAll('.anchor-btn');
+  anchorBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      anchorMode = btn.dataset.anchor;
+      anchorBtns.forEach((b) => b.classList.toggle('active', b === btn));
+      resetCloth(true);
+    });
   });
 
   const gridToggleBtn = document.getElementById('gridToggleBtn');
