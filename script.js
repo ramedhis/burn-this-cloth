@@ -694,8 +694,26 @@
       // the whole window instead of a fixed box, so it stays correct
       // through resizes and cloth-size changes without needing its
       // own constant.
+      //
+      // This only exists to clean up torn-off burning fragments that
+      // have fallen well clear of view -- it's NOT supposed to catch
+      // ordinary cloth swinging on a pendulum. destroyed is permanent
+      // (linkIntact treats a destroyed particle as gone forever, on
+      // both the physics and the mesh side), so marking a perfectly
+      // healthy, unburned vertex destroyed just because a gust or the
+      // cloth's own momentum swung it a bit past the bottom edge meant
+      // it never came back once it swung back into view -- it read as
+      // a permanent bite taken out of the cloth, which is exactly the
+      // "chunk missing after it swings back" bug this was causing from
+      // the very start. CUT_THRESHOLD (not just "any burn at all") is
+      // the right line here -- that's the exact point linkIntact()
+      // already treats a vertex as cut loose from the mesh, so this
+      // only ever fires on something that's already a free, untethered
+      // scrap. A vertex that's lightly charred but still structurally
+      // part of the fabric is not a "fragment" yet and shouldn't be
+      // eligible either.
       const fallLimit = (VIEW_H - originY) / clothScale + 40;
-      if (p.y > fallLimit) {
+      if (p.burn >= CUT_THRESHOLD && p.y > fallLimit) {
         p.destroyed = true;
         spawnAshPuff(p.x, HEIGHT + 20);
       }
