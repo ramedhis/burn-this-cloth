@@ -43,7 +43,7 @@
   });
 })();
 
-// Cloth + fire toy, PixiJS edition. Two systems glued together:
+// Cloth + fire toy using PixiJS. Two systems glued together:
 //   1) A mass-spring grid that warps an image (the "cloth")
 //   2) A small particle sim for flames/embers/smoke (the "fire")
 // They only talk to each other through burn values on grid points.
@@ -66,6 +66,13 @@
 
   let WIDTH = 600;
   let HEIGHT = 600;
+
+  // Fire visuals (flame/ember/smoke size, ignite radius) are all
+  // tuned in absolute px against a 600x600 canvas. Everything
+  // fire-related gets multiplied by this before use.
+  function fireScale() {
+    return Math.min(WIDTH, HEIGHT) / 600;
+  }
 
   // Sizes the box the canvas actually sits in so it never blows past
   // the viewport, while keeping the true pixel aspect ratio intact
@@ -94,7 +101,19 @@
     antialias: true,
     backgroundAlpha: 0,
   });
-  app.stop(); // we drive our own rAF loop below and render manually
+  app.stop(); // We drive our own rAF loop below and render manually
+
+  // Ask the GPU what it can actually handle, but don't go past 4K
+  // regardless -- a hardcoded cap was clamping both W and H to the
+  // same number before, so anything past it always came out square
+  // no matter what aspect ratio was typed in
+  const MAX_CANVAS_DIM = (() => {
+    try {
+      return Math.min(app.renderer.gl.getParameter(app.renderer.gl.MAX_TEXTURE_SIZE), 4096);
+    } catch (e) {
+      return 4096; // WebGL1 baseline, safe fallback if the query fails
+    }
+  })();
 
   const clothContainer = new PIXI.Container();
   const smokeContainerObj = new PIXI.Container();
@@ -119,12 +138,28 @@
   let COLS = densities[densityIdx].c;
   let ROWS = densities[densityIdx].r;
 
-  // Fixed pixel gap on every side
-  const CLOTH_GAP = 20;
+  // Gap between the cloth and the canvas edge used to be a fixed 20px
+  // on every side so the cloth read as a piece of fabric sitting inside
+  // a frame -- now that the canvas border itself can be toggled off,
+  // keeping that gap just left a dead margin of bare background around
+  // the image.
+  // Cloth now runs flush with the canvas edge; set this back above 0
+  // if a margin is ever wanted again.
+  const CLOTH_GAP = 0;
+
+  // The cloth's bottom edge runs a bit past the actual canvas, so it
+  // reads as a longer piece of fabric that's just cut off by the
+  // frame instead of a garment that conveniently ends exactly at
+  // the edge
+  const BOTTOM_BLEED_FRAC = 0;
+
+  function clothBottomBleed() {
+    return HEIGHT * BOTTOM_BLEED_FRAC;
+  }
   function clothRect() {
     return {
       x: CLOTH_GAP, y: CLOTH_GAP,
-      w: WIDTH - CLOTH_GAP * 2, h: HEIGHT - CLOTH_GAP * 2,
+      w: WIDTH - CLOTH_GAP * 2, h: HEIGHT - CLOTH_GAP * 2 + clothBottomBleed(),
     };
   }
 
@@ -187,14 +222,13 @@
   function idx(i, j) { return j * (COLS + 1) + i; }
 
   let particles = [];
+
   // Structural + shear constraints between neighbouring particles.
-  // This is the entire support structure -- there is no separate
-  // "attachment" bookkeeping anymore. A point stays up only because
-  // an unbroken chain of these links connects it, particle by
+  // This is the entire support structure. A point stays up only
+  // because an unbroken chain of these links connects it, particle by
   // particle, back to a still-intact pinned point on the top row.
   // Burn a link and only the particles that actually depended on
-  // that specific link lose support -- nothing routes "the long way
-  // around" to fake staying attached.
+  // that specific link lose support.
   let constraints = [];
 
   function addConstraint(a, b, diagonal) {
@@ -222,12 +256,11 @@
     }
   }
 
-  // A link (real or implied, e.g. a mesh-render triangle edge) still
-  // carries support only if neither endpoint is gone and neither has
-  // burned past the cut threshold. Used identically by the physics
-  // solver (does this constraint pull?) and the mesh renderer (does
-  // this triangle still exist?), so the two can never disagree about
-  // where a tear is.
+  // A link still carries support only if neither endpoint is gone
+  // and neither has burned past the cut threshold. Used identically
+  // by the physics solver (does this constraint pull?) and the mesh
+  // renderer (does this triangle still exist?), so the two can never
+  // disagree about where a tear is.
   function linkIntact(pa, pb) {
     if (pa.destroyed || pb.destroyed) return false;
     return Math.max(pa.burn, pb.burn) < CUT_THRESHOLD;
@@ -244,7 +277,7 @@
     for (let j = 0; j <= ROWS; j++) {
       for (let i = 0; i <= COLS; i++) {
         const rx = rect.x + i * spx, ry = rect.y + j * spy;
-        const pinned = j === 0; // whole top edge anchored, curtain-rod style
+        const pinned = j === 0; // Whole top edge anchored, curtain-rod style
         particles.push({
           x: rx, y: ry, oldX: rx, oldY: ry, restX: rx, restY: ry,
           pinned,
@@ -277,8 +310,8 @@
   }
 
   function applyCanvasSize(w, h) {
-    WIDTH = Math.max(64, Math.min(2160, Math.round(w) || WIDTH));
-    HEIGHT = Math.max(64, Math.min(2160, Math.round(h) || HEIGHT));
+    WIDTH = Math.max(64, Math.min(MAX_CANVAS_DIM, Math.round(w) || WIDTH));
+    HEIGHT = Math.max(64, Math.min(MAX_CANVAS_DIM, Math.round(h) || HEIGHT));
     texCanvas.width = WIDTH;
     texCanvas.height = HEIGHT;
     app.renderer.resize(WIDTH, HEIGHT);
@@ -305,7 +338,69 @@
   const CUT_THRESHOLD = 0.55;
   const CONSTRAINT_ITERATIONS = 5;
 
-  let mouse = { x: -9999, y: -9999, active: false };
+  // Wind: separate from the PUSH_* stuff above, which just shoves the
+  // fabric away from wherever the cursor is. This instead looks at
+  // how the cursor is moving and blows the cloth along that same
+  // direction, scaled by how fast it's moving -- wave your mouse
+  // across it like fanning a curtain and the fabric billows with it;
+  // stand still and it settles back down.
+  //
+  // A first pass at this just applied cursor velocity as a force
+  // near the cursor, and it just looked like the cloth getting shoved
+  // -- a real gust doesn't hit as one rigid slab, it rolls through
+  // the fabric as a wave, so nearby columns are pushed at slightly
+  // different times and by slightly different amounts. That's what
+  // windPower + the traveling sine term below are for.
+  const WIND_GAIN = 0.45;       // Force per unit of eased gust strength (px/s)
+  const WIND_RESPONSE = 7;      // How fast the gust ramps up when you move fast
+  const WIND_DECAY = 2.0;       // How fast it eases back down once you slow/stop
+  const WIND_WAVE_FREQ = 0.022; // Spatial frequency of the traveling ripple, per px
+  const WIND_WAVE_SPEED = 6.5;  // How fast that ripple travels across the cloth
+  const WIND_WAVE_DEPTH = 0.6;  // How much the ripple modulates the gust (0 = uniform push)
+  const WIND_FLUTTER = 0.35;    // Extra sideways shimmer riding along the gust
+  const MOUSE_SPEED_CAP = 4000; // px/s -- keeps one laggy frame from launching the cloth
+
+  let mouse = { x: -9999, y: -9999, px: -9999, py: -9999, active: false, vx: 0, vy: 0, speed: 0 };
+  let simTime = 0;   // Just keeps climbing, used to phase the wave and flutter
+  let windPower = 0; // Eased gust strength -- chases cursor speed instead of snapping to it
+  let windDirX = 1, windDirY = 0; // last direction the gust was heading
+
+  // Cursor position updates every mousemove, but mousemove doesn't
+  // fire on a tidy schedule -- so instead of trusting a single event's
+  // delta, this samples position once per physics step and smooths
+  // the resulting velocity. That's also what keeps a single stray
+  // jump (e.g. re-entering the canvas somewhere completely different)
+  // from registering as one absurd gust.
+  function updateMouseVelocity(dt) {
+    if (mouse.active && mouse.px > -9000 && dt > 0) {
+      const rawVx = (mouse.x - mouse.px) / dt;
+      const rawVy = (mouse.y - mouse.py) / dt;
+      mouse.vx += (rawVx - mouse.vx) * 0.35;
+      mouse.vy += (rawVy - mouse.vy) * 0.35;
+    } else {
+      mouse.vx *= 0.9;
+      mouse.vy *= 0.9;
+    }
+    const spd = Math.hypot(mouse.vx, mouse.vy);
+    if (spd > MOUSE_SPEED_CAP) {
+      const k = MOUSE_SPEED_CAP / spd;
+      mouse.vx *= k; mouse.vy *= k;
+    }
+    mouse.speed = Math.hypot(mouse.vx, mouse.vy);
+    mouse.px = mouse.x; mouse.py = mouse.y;
+
+    // windPower eases toward the current speed rather than tracking it
+    // 1:1 -- ramping up fast but decaying slower is what makes a swipe
+    // feel like it kicks off a gust that then has to die down, instead
+    // of the wind just being "on" exactly while the mouse is moving.
+    const target = mouse.active ? mouse.speed : 0;
+    const rate = target > windPower ? WIND_RESPONSE : WIND_DECAY;
+    windPower += (target - windPower) * Math.min(1, rate * dt);
+    if (mouse.speed > 30) {
+      windDirX = mouse.vx / mouse.speed;
+      windDirY = mouse.vy / mouse.speed;
+    }
+  }
 
   function verletIntegrate(dt) {
     for (let n = 0; n < particles.length; n++) {
@@ -335,13 +430,36 @@
         }
       }
 
+      if (windPower > 3) {
+
+        // The gust isn't the same strength everywhere at the same
+        // instant -- it's a wave running along the sheet, phased by
+        // each vertex's rest position, so different columns catch it
+        // at slightly different moments. That's the difference between
+        // "the fabric got shoved" and "the fabric is billowing": a
+        // uniform push moves the whole thing as one rigid card, a
+        // traveling wave makes ridges form and roll across it.
+        const wavePos = p.restX * WIND_WAVE_FREQ + simTime * WIND_WAVE_SPEED;
+        const wave = 0.5 + 0.5 * Math.sin(wavePos + p.seed * 0.4);
+        const gust = windPower * WIND_GAIN * (1 - WIND_WAVE_DEPTH + WIND_WAVE_DEPTH * wave);
+        ax += windDirX * gust;
+        ay += windDirY * gust * 0.4; // wind mostly drives sideways drift, not straight into the ground
+
+        // Sideways shimmer riding along the gust, on its own faster
+        // wave so it doesn't just retrace the same shape every pass
+        const perpX = -windDirY, perpY = windDirX;
+        const flutter = Math.sin(simTime * 9 + p.restX * 0.05 + p.seed) * gust * WIND_FLUTTER;
+        ax += perpX * flutter;
+        ay += perpY * flutter;
+      }
+
       const vx = (p.x - p.oldX) * DAMPING;
       const vy = (p.y - p.oldY) * DAMPING;
       p.oldX = p.x; p.oldY = p.y;
       p.x += vx + ax * dt * dt;
       p.y += vy + ay * dt * dt;
 
-      if (p.y > HEIGHT + 80) {
+      if (p.y > HEIGHT + clothBottomBleed() + 80) {
         p.destroyed = true;
         spawnAshPuff(p.x, HEIGHT + 20);
       }
@@ -375,6 +493,8 @@
 
   function stepCloth(dt) {
     dt = Math.min(dt, 1 / 30);
+    simTime += dt;
+    updateMouseVelocity(dt);
     verletIntegrate(dt);
     satisfyConstraints();
 
@@ -419,13 +539,91 @@
   // That's what produces the actual rip/hole instead of a smoothed-
   // over seam, without ever touching buffer sizes.
   let geometry = null, mesh = null;
-  let positions, uvs, burnArr, indices;
+  let positions, uvs, burnArr, shadeArr, indices;
   const glowPool = [];
 
-  // wireframe overlay, just the structural links (no diagonals, it's
-  // unreadable with those on) -- reuses linkIntact so the lines drop
-  // out exactly where the cloth actually tears instead of keeping
-  // their own separate idea of what's still connected
+  // Fake lighting for the fold shading below. There's no real z on
+  // these particles, just x/y, so instead of an actual normal we use
+  // the direction the local patch of cloth is curling in screen space
+  // (see vertexShade) and dot it against a light coming from up and
+  // slightly to the left. Flip these two numbers if you want the
+  // "sun" coming from somewhere else.
+  function normalize2(x, y) {
+    const len = Math.hypot(x, y) || 1;
+    return [x / len, y / len];
+  }
+  const [LIGHT_X, LIGHT_Y] = normalize2(-0.55, -1);
+  const SHADE_BEND_STRENGTH = 2.4; // How visible ridges/valleys are
+  const SHADE_AO_STRENGTH = 4.5;   // Extra darkening where cloth bunches into a crease
+
+  // Per-vertex fake-3D term, recomputed every frame since the cloth
+  // keeps moving. Two things get blended together:
+  //  - "bend": the discrete Laplacian of the vertex's position (how
+  //    far it sits from the average of its neighbors) points toward
+  //    whichever way the local patch is curling. Dotting that with a
+  //    fixed light direction gives ridges facing the light a little
+  //    boost and the far side of the fold a little shadow -- same
+  //    read as a normal map, just derived from in-plane bending
+  //    instead of an actual surface normal.
+  //  - "ao": wherever neighboring particles are pulled closer
+  //    together than their rest spacing (the mesh compressing on
+  //    itself), that's a crease pinching shut, and creases catch less
+  //    light than flat fabric regardless of which way they lean.
+  // Both terms get divided by the local rest spacing before anything
+  // else -- a raw pixel Laplacian shrinks the second you switch to a
+  // denser grid (more, smaller cells = smaller numbers for the exact
+  // same fold), which is why this was barely visible at the "fine"
+  // density that loads by default. Dividing by restLen turns it into
+  // "how much this deviates as a fraction of a cell", which stays
+  // meaningful at any density or canvas size.
+  function vertexShade(i, j) {
+    const p = particles[idx(i, j)];
+    if (p.destroyed) return 0;
+
+    const left = i > 0 ? particles[idx(i - 1, j)] : null;
+    const right = i < COLS ? particles[idx(i + 1, j)] : null;
+    const up = j > 0 ? particles[idx(i, j - 1)] : null;
+    const down = j < ROWS ? particles[idx(i, j + 1)] : null;
+
+    let lapX = 0, lapY = 0, bendTaps = 0;
+    let compress = 0, compressTaps = 0;
+
+    if (left && right && !left.destroyed && !right.destroyed) {
+      const restLen = Math.hypot(right.restX - left.restX, right.restY - left.restY) || 1;
+      lapX += (left.x + right.x - 2 * p.x) / restLen;
+      lapY += (left.y + right.y - 2 * p.y) / restLen;
+      bendTaps++;
+      const curLen = Math.hypot(right.x - left.x, right.y - left.y);
+      compress += (restLen - curLen) / restLen;
+      compressTaps++;
+    }
+    if (up && down && !up.destroyed && !down.destroyed) {
+      const restLen = Math.hypot(down.restX - up.restX, down.restY - up.restY) || 1;
+      lapX += (up.x + down.x - 2 * p.x) / restLen;
+      lapY += (up.y + down.y - 2 * p.y) / restLen;
+      bendTaps++;
+      const curLen = Math.hypot(down.x - up.x, down.y - up.y);
+      compress += (restLen - curLen) / restLen;
+      compressTaps++;
+    }
+    if (bendTaps === 0) return 0;
+
+    const bend = (lapX * LIGHT_X + lapY * LIGHT_Y) * SHADE_BEND_STRENGTH;
+    const ao = compressTaps ? Math.max(0, compress / compressTaps) * SHADE_AO_STRENGTH : 0;
+    const raw = bend - ao;
+
+    // Push weak-but-real curvature (a gentle sag, a shallow ripple)
+    // further toward visible without needing to crank the strength
+    // constants so high that an actual sharp fold blows out to pure
+    // black/white. Same shape as a gamma curve, just kept symmetric
+    // around zero since this can go either light or dark.
+    const sign = raw < 0 ? -1 : 1;
+    return sign * Math.pow(Math.min(Math.abs(raw), 1), 0.55);
+  }
+
+  // wireframe overlay, just the structural links -- reuses linkIntact
+  // so the lines drop out exactly where the cloth actually tears instead
+  // of keeping their own separate idea of what's still connected
   const gridGraphics = new PIXI.Graphics();
   clothContainer.addChild(gridGraphics);
   let showGrid = false;
@@ -447,23 +645,27 @@
     attribute vec2 aVertexPosition;
     attribute vec2 aTextureCoord;
     attribute float aBurn;
+    attribute float aShade;
 
     uniform mat3 projectionMatrix;
     uniform mat3 translationMatrix;
 
     varying vec2 vTextureCoord;
     varying float vBurn;
+    varying float vShade;
 
     void main(void) {
       gl_Position = vec4((projectionMatrix * translationMatrix * vec3(aVertexPosition, 1.0)).xy, 0.0, 1.0);
       vTextureCoord = aTextureCoord;
       vBurn = aBurn;
+      vShade = aShade;
     }
   `;
 
   const fragmentSrc = `
     varying vec2 vTextureCoord;
     varying float vBurn;
+    varying float vShade;
 
     uniform sampler2D uSampler;
     uniform vec4 uColor;
@@ -479,13 +681,35 @@
       vec4 texColor = texture2D(uSampler, vTextureCoord);
       float t = clamp(vBurn, 0.0, 1.0);
 
+      // A dropped-in photo comes in glossy-print vibrant -- dyed
+      // fabric never looks like that, ink sinks into the weave
+      // instead of sitting on a reflective surface. Pull it toward
+      // something closer to printed cloth: a bit less saturated, a
+      // bit less contrasty, a bit less bright. Small nudges on
+      // purpose -- enough to read as "this is fabric" without it
+      // looking washed out or grey.
+      float luma = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
+      vec3 fabricColor = mix(texColor.rgb, vec3(luma), 0.22);
+      fabricColor = mix(vec3(0.5), fabricColor, 0.85);
+      fabricColor *= 0.92;
+
+      // Fold shading: vShade comes from the JS side (vertexShade),
+      // where it's derived from how much each vertex is bending and
+      // bunching up relative to its neighbors. Positive = ridge
+      // catching the light, negative = crease or the far side of a
+      // fold. Applied as a simple brightness multiplier rather than
+      // anything physically-based -- it just needs to sell "this is
+      // draped fabric" and not "this is a flat poster".
+      float shade = clamp(vShade, -1.0, 1.0);
+      vec3 lit = clamp(fabricColor * (1.0 + shade * 0.85), 0.0, 1.0);
+
       // Char: darkens and browns out smoothly with burn amount --
       // continuous across the whole mesh since it's a per-pixel
       // shader value, so there's no triangle-edge seam to fight the
       // way the old multiply-rect-per-triangle pass had to.
       vec3 charColor = mix(vec3(0.35, 0.22, 0.14), vec3(0.05, 0.03, 0.02), smoothstep(0.15, 0.85, t));
       float charMix = smoothstep(0.05, 0.85, t);
-      vec3 scorched = mix(texColor.rgb, texColor.rgb * charColor * 2.2, charMix);
+      vec3 scorched = mix(lit, lit * charColor * 2.2, charMix);
 
       // A thin band of ember glow right where a patch is actively
       // burning through, before it's fully charred black.
@@ -512,6 +736,7 @@
     positions = new Float32Array(nVerts * 2);
     uvs = new Float32Array(nVerts * 2);
     burnArr = new Float32Array(nVerts);
+    shadeArr = new Float32Array(nVerts);
     indices = new Uint32Array(COLS * ROWS * 6);
 
     for (let j = 0; j <= ROWS; j++) {
@@ -529,6 +754,7 @@
       .addAttribute('aVertexPosition', positions, 2)
       .addAttribute('aTextureCoord', uvs, 2)
       .addAttribute('aBurn', burnArr, 1)
+      .addAttribute('aShade', shadeArr, 1)
       .addIndex(indices);
 
     const shader = PIXI.Shader.from(vertexSrc, fragmentSrc, {
@@ -589,16 +815,23 @@
   }
 
   function updateMeshBuffers() {
+    const rowLen = COLS + 1;
     for (let n = 0; n < particles.length; n++) {
       const p = particles[n];
       positions[n * 2] = p.x;
       positions[n * 2 + 1] = p.y;
       burnArr[n] = Math.min(p.burn, 1);
+
+      // n walks the same j-outer, i-inner order buildGrid() filled
+      // particles in, so this recovers the (i,j) vertexShade wants
+      // without needing a second lookup table.
+      shadeArr[n] = vertexShade(n % rowLen, (n / rowLen) | 0);
     }
     rebuildMeshIndices();
 
     geometry.getBuffer('aVertexPosition').update(positions);
     geometry.getBuffer('aBurn').update(burnArr);
+    geometry.getBuffer('aShade').update(shadeArr);
     geometry.indexBuffer.update(indices);
   }
 
@@ -611,42 +844,49 @@
   const MAX_EMBERS = 140;
   const MAX_SMOKE = 90;
 
-  function spawnFlame(x, y) {
+  function spawnFlame(x, y, sizeMul) {
     if (flames.length > MAX_FLAMES) return;
+    sizeMul = sizeMul || 1;
+    const fs = fireScale();
     flames.push({
-      x: x + (Math.random() - 0.5) * 6,
-      y: y + (Math.random() - 0.5) * 6,
-      vx: (Math.random() - 0.5) * 26,
-      vy: -(40 + Math.random() * 55),
+      x: x + (Math.random() - 0.5) * 6 * fs,
+      y: y + (Math.random() - 0.5) * 6 * fs,
+      vx: (Math.random() - 0.5) * 20 * fs,
+      vy: -(45 + Math.random() * 40) * Math.sqrt(sizeMul) * fs, // Bigger tongues punch up harder too
       life: 0,
-      maxLife: 0.35 + Math.random() * 0.4,
-      size: 9 + Math.random() * 10,
+      maxLife: (0.3 + Math.random() * 0.35) * (0.7 + sizeMul * 0.5), // and stick around longer
+      size: (8 + Math.random() * 9) * sizeMul * fs,
       wobble: Math.random() * Math.PI * 2,
+      wobble2: Math.random() * Math.PI * 2,
+      flicker: Math.random() * 10,
     });
   }
 
   function spawnEmber(x, y) {
     if (embers.length > MAX_EMBERS) return;
+    const fs = fireScale();
     embers.push({
       x, y,
-      vx: (Math.random() - 0.5) * 40,
-      vy: -(30 + Math.random() * 70),
+      vx: (Math.random() - 0.5) * 40 * fs,
+      vy: -(30 + Math.random() * 70) * fs,
       life: 0,
       maxLife: 0.6 + Math.random() * 1.1,
-      size: 1 + Math.random() * 2.2,
+      size: (1 + Math.random() * 2.2) * fs,
       flicker: Math.random() * 10,
+      hue: Math.random(), // Some run hotter/yellower, some already cooling toward red
     });
   }
 
   function spawnSmoke(x, y) {
     if (smoke.length > MAX_SMOKE) return;
+    const fs = fireScale();
     smoke.push({
       x, y,
-      vx: (Math.random() - 0.5) * 12,
-      vy: -(18 + Math.random() * 18),
+      vx: (Math.random() - 0.5) * 12 * fs,
+      vy: -(18 + Math.random() * 18) * fs,
       life: 0,
       maxLife: 1.8 + Math.random() * 1.4,
-      size: 10 + Math.random() * 10,
+      size: (10 + Math.random() * 10) * fs,
     });
   }
 
@@ -674,9 +914,19 @@
     };
 
     stepList(flames, (f) => {
-      f.wobble += dt * 10;
-      f.x += (f.vx + Math.sin(f.wobble) * 18) * dt;
-      f.y += f.vy * dt;
+      f.wobble += dt * 11;
+      f.wobble2 += dt * 23;
+
+      // Two sine waves beat against each other instead of one
+      // clean wave, so the tongue doesn't just swing side to
+      // side on a metronomexpress
+      const sway = Math.sin(f.wobble) * 16 + Math.sin(f.wobble2) * 7;
+      f.x += (f.vx + sway) * dt;
+
+      // Hot gas shoots up fast right off the fuel, then that push
+      // dies out and it's just drifting/cooling like before
+      const launch = Math.max(0, 1 - f.life * 5) * 85;
+      f.y += (f.vy - launch) * dt;
       f.vy *= 0.985;
     });
 
@@ -690,7 +940,8 @@
     stepList(smoke, (s) => {
       s.x += (s.vx + Math.sin(s.life * 3 + s.x) * 6) * dt;
       s.y += s.vy * dt;
-      s.size += dt * 14;
+      s.vy *= 0.99; // Rises fast off the flame, then spreads out and loiters
+      s.size += dt * (12 + s.life * 6); // billows out faster the older/cooler it gets
     });
   }
 
@@ -754,6 +1005,26 @@
     }
   }
 
+  // 0xRRGGBB lerp -- used to get an actual color gradient over a
+  // particle's life instead of snapping between 2-3 fixed colors
+  function lerpColor(c1, c2, t) {
+    const r1 = (c1 >> 16) & 255, g1 = (c1 >> 8) & 255, b1 = c1 & 255;
+    const r2 = (c2 >> 16) & 255, g2 = (c2 >> 8) & 255, b2 = c2 & 255;
+    const r = Math.round(r1 + (r2 - r1) * t);
+    const g = Math.round(g1 + (g2 - g1) * t);
+    const b = Math.round(b1 + (b2 - b1) * t);
+    return (r << 16) | (g << 8) | b;
+  }
+
+  // Pale hot core -> yellow -> orange -> dying red-brown, as one
+  // continuous ramp instead of a couple of hard-edged color bands
+  function flameColorAt(t) {
+    if (t < 0.18) return lerpColor(0xfffbe8, 0xfff2a8, t / 0.18);
+    if (t < 0.45) return lerpColor(0xfff2a8, 0xffa53a, (t - 0.18) / 0.27);
+    if (t < 0.75) return lerpColor(0xffa53a, 0xe8551a, (t - 0.45) / 0.3);
+    return lerpColor(0xe8551a, 0x781c0a, (t - 0.75) / 0.25);
+  }
+
   function updateFireSprites() {
     for (let n = 0; n < particles.length; n++) {
       const p = particles[n];
@@ -763,12 +1034,33 @@
       const intensity = Math.min(p.burn, 1);
       s.visible = true;
       s.x = p.x; s.y = p.y;
-      const sizePx = 60 + intensity * 70;
+      const sizePx = (60 + intensity * 70) * fireScale();
       s.width = sizePx; s.height = sizePx;
-      s.alpha = 0.35 + intensity * 0.4;
+
+      // A little pulse so the ambient light doesn't sit dead-flat
+      const flicker = 0.85 + Math.sin(p.seed * 3 + p.heat * 8) * 0.15;
+      s.alpha = (0.35 + intensity * 0.4) * flicker;
     }
 
-    const applyPool = (pool, list, tintFn, sizeFn) => {
+    // Flames get their own pass
+    for (let k = 0; k < flamePool.length; k++) {
+      const s = flamePool[k];
+      if (k >= flames.length) { s.visible = false; continue; }
+      const f = flames[k];
+      const t = f.life / f.maxLife;
+      s.visible = true;
+      s.x = f.x; s.y = f.y;
+      const taper = 1 - 0.45 * t; // Narrows as it rises
+      const stretch = 1 + 0.9 * t; // and stretches into a tongue
+      s.width = f.size * 2 * taper;
+      s.height = f.size * 2.6 * stretch;
+      s.rotation = Math.max(-0.35, Math.min(0.35, f.vx / 90)); // Leans with its own drift
+      const shimmer = 0.85 + Math.sin(f.flicker + f.life * 40) * 0.15;
+      s.alpha = Math.max(0, (1 - t) * shimmer);
+      s.tint = flameColorAt(t);
+    }
+
+    const applyPool = (pool, list, tintFn, sizeFn, alphaFn) => {
       for (let k = 0; k < pool.length; k++) {
         const s = pool[k];
         if (k < list.length) {
@@ -778,7 +1070,7 @@
           s.x = it.x; s.y = it.y;
           const sz = sizeFn(it, lifeT);
           s.width = sz; s.height = sz;
-          s.alpha = Math.max(0, 1 - lifeT);
+          s.alpha = alphaFn ? alphaFn(it, lifeT) : Math.max(0, 1 - lifeT);
           s.tint = tintFn(it, lifeT);
         } else {
           s.visible = false;
@@ -786,11 +1078,14 @@
       }
     };
 
-    applyPool(flamePool, flames,
-      (f, t) => (t < 0.4 ? 0xfff2c0 : (t < 0.75 ? 0xffa53a : 0xe8551a)),
-      (f, t) => f.size * (1.15 - 0.3 * t) * 2);
-    applyPool(emberPool, embers, () => 0xffcf7a, (e) => e.size * 5);
-    applyPool(smokePool, smoke, () => 0x5a5a56, (s) => s.size * 1.6);
+    applyPool(emberPool, embers,
+      (e, t) => lerpColor(lerpColor(0xffe9a8, 0xff6a1a, e.hue), 0x501008, t),
+      (e, t) => e.size * 5 * (1 - 0.3 * t),
+      (e, t) => Math.max(0, 1 - t) * (0.7 + 0.3 * Math.sin(e.flicker + e.life * 30)));
+    applyPool(smokePool, smoke,
+      (s, t) => lerpColor(0x201d1a, 0x6a6a66, t), // Starts as dark soot, thins out grey
+      (s) => s.size * 1.6,
+      (s, t) => Math.pow(1 - t, 1.4) * 0.8);
   }
 
   // Input
@@ -803,24 +1098,74 @@
 
   canvas.addEventListener('mousemove', (e) => {
     const pos = getPos(e);
+    // if the cursor was off the canvas:
+    // snap px/py to here so the gap doesn't get read as one giant
+    // instantaneous swipe
+    if (!mouse.active) { mouse.px = pos.x; mouse.py = pos.y; mouse.vx = 0; mouse.vy = 0; }
     mouse.x = pos.x; mouse.y = pos.y; mouse.active = true;
   });
   canvas.addEventListener('mouseleave', () => { mouse.active = false; });
   canvas.addEventListener('touchmove', (e) => {
     const pos = getPos(e);
+    if (!mouse.active) { mouse.px = pos.x; mouse.py = pos.y; mouse.vx = 0; mouse.vy = 0; }
     mouse.x = pos.x; mouse.y = pos.y; mouse.active = true;
     e.preventDefault();
   }, { passive: false });
 
   function ignite(pos) {
-    let best = null, bestD = Infinity;
+    // Roll a random patch size per click -- sometimes it's a small
+    // lick of flame, sometimes a proper spreading blaze right away
+    const radius = (14 + Math.random() * 70) * fireScale();
+    const radiusSq = radius * radius;
+    let hitAny = false;
+
     for (const p of particles) {
       if (p.destroyed) continue;
       const dx = p.x - pos.x, dy = p.y - pos.y;
       const d = dx * dx + dy * dy;
-      if (d < bestD) { bestD = d; best = p; }
+      if (d > radiusSq) continue;
+
+      hitAny = true;
+      p.burning = true;
+      const falloff = 1 - Math.sqrt(d) / radius;
+      const startBurn = 0.05 + falloff * 0.25 * Math.random();
+      if (p.burn < startBurn) p.burn = startBurn;
     }
-    if (best) { best.burning = true; if (best.burn < 0.05) best.burn = 0.05; }
+
+    // Click landed somewhere with nothing in range (e.g. right at an
+    // edge) -- fall back to just the closest particle so it never
+    // just silently does nothing
+    if (!hitAny) {
+      let best = null, bestD = Infinity;
+      for (const p of particles) {
+        if (p.destroyed) continue;
+        const dx = p.x - pos.x, dy = p.y - pos.y;
+        const d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; best = p; }
+      }
+      if (best) { best.burning = true; if (best.burn < 0.05) best.burn = 0.05; }
+    }
+
+    // The sprite burst land -- separate roll from the cloth-patch
+    // radius above, so a click can catch a wide patch of cloth but
+    // still only throw out one big flame, or the other way around.
+    const roll = Math.random();
+    if (roll < 0.3) {
+      // One flame, but a proper tall one
+      spawnFlame(pos.x, pos.y, 2.2 + Math.random() * 1.6);
+    } else if (roll < 0.6) {
+      // A handful of small ones
+      const n = 3 + Math.floor(Math.random() * 4);
+      for (let k = 0; k < n; k++) {
+        spawnFlame(pos.x, pos.y, 0.5 + Math.random() * 0.5);
+      }
+    } else {
+      // Ordinary mixed burst
+      const n = 1 + Math.floor(Math.random() * 3);
+      for (let k = 0; k < n; k++) {
+        spawnFlame(pos.x, pos.y, 0.8 + Math.random() * 1.3);
+      }
+    }
   }
 
   canvas.addEventListener('click', (e) => { ignite(getPos(e)); });
@@ -854,6 +1199,16 @@
     showGrid = !showGrid;
     gridToggleBtn.textContent = 'Mesh: ' + (showGrid ? 'shown' : 'hidden');
     gridToggleBtn.classList.toggle('is-on', showGrid);
+  });
+
+  // Starts true since the stage ships with its border painted
+  let showBorder = true;
+  const borderToggleBtn = document.getElementById('borderToggleBtn');
+  borderToggleBtn.addEventListener('click', () => {
+    showBorder = !showBorder;
+    borderToggleBtn.textContent = 'Border: ' + (showBorder ? 'shown' : 'hidden');
+    borderToggleBtn.classList.toggle('is-on', showBorder);
+    stageEl.classList.toggle('no-border', !showBorder);
   });
 
   // Canvas size controls:
