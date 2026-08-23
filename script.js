@@ -115,12 +115,13 @@
     }
   })();
 
+  const bgContainer = new PIXI.Container();
   const clothContainer = new PIXI.Container();
   const smokeContainerObj = new PIXI.Container();
   const glowContainerObj = new PIXI.Container();
   const emberContainerObj = new PIXI.Container();
   const flameContainerObj = new PIXI.Container();
-  app.stage.addChild(clothContainer, smokeContainerObj, glowContainerObj, emberContainerObj, flameContainerObj);
+  app.stage.addChild(bgContainer, clothContainer, smokeContainerObj, glowContainerObj, emberContainerObj, flameContainerObj);
 
   // Grid resolution now drives BOTH physics and the render mesh --
   // there's no separate "sub" render multiplier anymore, since the
@@ -174,6 +175,43 @@
 
   let sourceImage = null;
   let clothTexture = null;
+
+  // Separate canvas + texture for the background layer. Default is
+  // plain black -- same as the canvas has always looked -- so loading
+  // nothing here changes nothing about the current look.
+  const bgCanvas = document.createElement('canvas');
+  bgCanvas.width = WIDTH;
+  bgCanvas.height = HEIGHT;
+  const bgCtx = bgCanvas.getContext('2d');
+
+  let bgImage = null;
+  let bgTexture = null;
+  let bgSprite = null;
+
+  function drawBackgroundCanvas() {
+    bgCtx.fillStyle = '#000000';
+    bgCtx.fillRect(0, 0, WIDTH, HEIGHT);
+    if (bgImage) {
+      // Same "cover" fit as the cloth image: fill the frame, crop
+      // whatever overhangs, no letterboxing.
+      const iw = bgImage.naturalWidth || bgImage.width;
+      const ih = bgImage.naturalHeight || bgImage.height;
+      const scale = Math.max(WIDTH / iw, HEIGHT / ih);
+      const dw = iw * scale, dh = ih * scale;
+      const dx = (WIDTH - dw) / 2, dy = (HEIGHT - dh) / 2;
+      bgCtx.drawImage(bgImage, dx, dy, dw, dh);
+    }
+  }
+
+  function refreshBackgroundTexture() {
+    drawBackgroundCanvas();
+    if (bgTexture) bgTexture.destroy(true);
+    bgTexture = PIXI.Texture.from(bgCanvas);
+    bgTexture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
+    if (bgSprite) bgContainer.removeChild(bgSprite);
+    bgSprite = new PIXI.Sprite(bgTexture);
+    bgContainer.addChild(bgSprite);
+  }
 
   function drawPlaceholderTexture() {
     const rect = clothRect();
@@ -342,9 +380,12 @@
     HEIGHT = Math.max(64, Math.min(MAX_CANVAS_DIM, Math.round(h) || HEIGHT));
     texCanvas.width = WIDTH;
     texCanvas.height = HEIGHT;
+    bgCanvas.width = WIDTH;
+    bgCanvas.height = HEIGHT;
     app.renderer.resize(WIDTH, HEIGHT);
     fitStage();
     resetCloth(false);
+    refreshBackgroundTexture();
   }
 
   // Cloth physics: Verlet integration + iterative distance-constraint
@@ -1219,6 +1260,25 @@
     refreshImageOnly();
   });
 
+  document.getElementById('bgFileInput').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      bgImage = img;
+      refreshBackgroundTexture();
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  });
+
+  document.getElementById('removeBgBtn').addEventListener('click', () => {
+    // Back to the default plain black background
+    bgImage = null;
+    refreshBackgroundTexture();
+  });
+
   document.getElementById('resetBtn').addEventListener('click', () => {
     resetCloth(false);
   });
@@ -1288,6 +1348,7 @@
   fitStage();
   drawPlaceholderTexture();
   resetCloth(true);
+  refreshBackgroundTexture();
 
   let last = performance.now();
   function loop(now) {
