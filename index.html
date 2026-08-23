@@ -23,7 +23,7 @@
     </div>
     <div class="panel-body">
       <div class="panel-hint">
-        Hover anywhere on the image to push the cloth. Click a spot to set it alight.
+        Hover anywhere on the image to push the cloth. Click a spot to set it on fire.
       </div>
       <div class="panel-row">
         <label class="file-btn">
@@ -36,15 +36,19 @@
       <div class="panel-row">
         <button id="gridToggleBtn">Mesh: hidden</button>
       </div>
+      <div class="panel-row">
+        <button id="borderToggleBtn" class="is-on">Border: shown</button>
+      </div>
 
       <div class="panel-label">Canvas size</div>
       <div class="preset-group" id="presetRow">
-        <button type="button" class="preset-btn" data-preset="square">Square</button>
-        <button type="button" class="preset-btn" data-preset="portrait">Portrait</button>
-        <button type="button" class="preset-btn" data-preset="story">Story</button>
+        <button type="button" class="preset-btn" data-preset="square">1:1</button>
+        <button type="button" class="preset-btn" data-preset="portrait">4:5</button>
+        <button type="button" class="preset-btn" data-preset="story">9:16</button>
       </div>
 
       <div class="panel-label">Custom size</div>
+      <div class="size-note">Capped at 4K per side</div>
       <div class="panel-row">
         <div class="field-pair">
           <input type="number" id="widthInput" placeholder="W" min="1" step="1" />
