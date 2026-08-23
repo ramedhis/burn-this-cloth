@@ -16,7 +16,7 @@
     overflow: hidden;
   }
 
-  /* Canvas is basically the whole page now, dead centered */
+  /* Canvas is basically the whole page dead centered */
   .stage-wrap {
     height: 100%;
     display: flex; align-items: center; justify-content: center;
@@ -28,6 +28,11 @@
     border: 1px solid var(--line);
     touch-action: none;
     cursor: crosshair;
+  }
+
+  /* Toggled from the panel -- same box, border just isn't painted */
+  .stage.no-border {
+    border-color: transparent;
   }
   canvas {
     display: block;
@@ -131,6 +136,12 @@
 
   .panel-body .panel-label:first-child { margin-top:0; }
 
+  .size-note {
+    font-size: 10.5px;
+    color: var(--ink-dim);
+    margin: -4px 0 8px;
+  }
+
   .preset-group {
     display: flex;
     border: 1px solid var(--line);
@@ -150,6 +161,7 @@
 
   input[type=number] {
     appearance: none;
+    -moz-appearance: textfield;
     background: var(--panel);
     color: var(--ink);
     border: 1px solid var(--line);
@@ -157,6 +169,14 @@
     font-family: inherit; font-size: 12px;
     width: 100%;
     flex: 1 1 0;
+  }
+
+  /* Kill the up/down steppers -- at 4 digits they were chewing up
+     enough of the field width that "4000" read like "400" */
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
   }
 
   input[type=number]:focus {
@@ -193,7 +213,8 @@
     background: var(--wash);
   }
 
-  #gridToggleBtn.is-on {
+  #gridToggleBtn.is-on,
+  #borderToggleBtn.is-on {
     background: var(--ink);
     color: #000;
     border-color: var(--ink);
