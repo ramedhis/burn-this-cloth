@@ -16,7 +16,7 @@
     overflow: hidden;
   }
 
-  /* Canvas is basically the whole page dead centered */
+  /* Canvas is basically the whole page, dead centered */
   .stage-wrap {
     height: 100%;
     display: flex; align-items: center; justify-content: center;
@@ -29,7 +29,6 @@
     touch-action: none;
     cursor: crosshair;
   }
-
   /* Toggled from the panel -- same box, border just isn't painted */
   .stage.no-border {
     border-color: transparent;
@@ -218,6 +217,20 @@
     background: var(--ink);
     color: #000;
     border-color: var(--ink);
+  }
+
+  /* The one button that actually wipes cloth/fire state, so it gets
+     the same red as the title accent instead of blending into the
+     rest of the panel */
+  #resetBtn {
+    border-color: #d1453d;
+    color: #d1453d;
+  }
+
+  #resetBtn:hover {
+    background: #d1453d;
+    color: #000;
+    border-color: #d1453d;
   }
 
   input[type=file] { display: none; }

@@ -219,6 +219,15 @@
     clothTexture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
   }
 
+  // Swaps the texture the mesh is actually painting without touching
+  // the cloth grid, burn state, or fire particles -- used by "remove
+  // image", which is only supposed to clear the picture, not act like
+  // a second reset button.
+  function refreshImageOnly() {
+    refreshClothTexture();
+    if (mesh && mesh.shader) mesh.shader.uniforms.uSampler = clothTexture;
+  }
+
   function idx(i, j) { return j * (COLS + 1) + i; }
 
   let particles = [];
@@ -1184,6 +1193,13 @@
     img.src = url;
   });
 
+  document.getElementById('removeImageBtn').addEventListener('click', () => {
+    // Clears the picture only -- cloth/burn/fire state is untouched
+    sourceImage = null;
+    drawPlaceholderTexture();
+    refreshImageOnly();
+  });
+
   document.getElementById('resetBtn').addEventListener('click', () => {
     resetCloth(false);
   });
@@ -1254,7 +1270,11 @@
     updateMeshBuffers();
     drawGrid();
     updateFireSprites();
-    app.renderer.render(app.stage);
+    try {
+      app.renderer.render(app.stage);
+    } catch (err) {
+      console.error('render() failed, skipping this frame:', err);
+    }
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
