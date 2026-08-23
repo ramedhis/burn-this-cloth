@@ -15,22 +15,19 @@
     overflow: hidden;
   }
 
-  /* Canvas is basically the whole page, dead centered */
+  /* Full-bleed: the stage IS the page now, edge to edge. The old
+     letterboxed box (sized by JS to fit an aspect ratio, centered by
+     this flex rule) is gone -- the "gap" people see is drawn inside
+     the canvas itself now, not left as bare page around a smaller box. */
   .stage-wrap {
     height: 100%;
-    display: flex; align-items: center; justify-content: center;
   }
   .stage {
     position: relative;
-    width: 600px; height: 600px;
+    width: 100%; height: 100%;
     background: #000000;
-    border: 1px solid var(--line);
     touch-action: none;
     cursor: crosshair;
-  }
-  /* Toggled from the panel -- same box, border just isn't painted */
-  .stage.no-border {
-    border-color: transparent;
   }
   canvas {
     display: block;
@@ -211,8 +208,7 @@
     background: var(--wash);
   }
 
-  #gridToggleBtn.is-on,
-  #borderToggleBtn.is-on {
+  #gridToggleBtn.is-on {
     background: var(--ink);
     color: #000;
     border-color: var(--ink);

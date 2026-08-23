@@ -62,30 +62,90 @@
 // cost is one draw call regardless of vertex count.
 (function () {
   const canvas = document.getElementById('c');
-  const stageEl = document.querySelector('.stage');
 
+  // WIDTH/HEIGHT is the cloth's *nominal* footprint -- exactly what's
+  // typed into the size fields, and exactly what the physics grid and
+  // source texture are built against. It has nothing to do with the
+  // actual pixel size of the renderer anymore -- see VIEW_W/VIEW_H
+  // below, which is the real canvas size, and is just "the browser
+  // window."
   let WIDTH = 600;
   let HEIGHT = 600;
 
+  // The renderer used to be sized at exactly WIDTH x HEIGHT (or, for a
+  // while, WIDTH x HEIGHT plus a modest fixed bleed). Either way, the
+  // instant a swaying or falling bit of cloth crossed that boundary it
+  // just stopped being drawn -- no fade, no scroll-off, just a dead
+  // straight line it vanished behind. That reads as an invisible wall.
+  //
+  // This version drops the idea of "the canvas" having its own size at
+  // all. The canvas IS the browser window (full-bleed, edge to edge --
+  // same idea as a print/broadcast layout that runs right off the page
+  // with no border). The cloth is drawn as a scaled, centered region
+  // inside that -- basically a camera looking at a fixed WIDTH x HEIGHT
+  // "world," parked back far enough that the cloth reads at the size
+  // you'd expect. What used to be the outer page-edge gap is now a
+  // safe-area inset: the space between the cloth's own top/bottom/side
+  // anchors and the true window edge, same as how broadcast TV keeps
+  // titles inside a "title-safe" box while the picture behind them
+  // still bleeds to the actual edge of the frame. Cloth can swing or
+  // fall anywhere across the whole window before it hits a real edge,
+  // which in practice is never.
+  let VIEW_W = window.innerWidth;
+  let VIEW_H = window.innerHeight;
+
+  // How much of the window the cloth's fitted size is allowed to fill
+  // -- the leftover is the safe-area gap around it. Same two numbers
+  // fitStage used to size the old letterboxed stage box; kept as
+  // fractions of the window rather than the cloth, so the gap reads as
+  // "a fixed sliver of the page" regardless of what size cloth you pick.
+  const SAFE_AREA_W_FRAC = 0.92;
+  const SAFE_AREA_H_FRAC = 0.88;
+
+  // clothScale: how many real screen pixels one WIDTH/HEIGHT-space
+  // unit maps to. originX/originY: where the cloth's own (0,0) lands
+  // in that full-window canvas. Recomputed by updateViewport() below
+  // any time the cloth size or the window size changes.
+  let clothScale = 1;
+  let originX = 0, originY = 0;
+
   // Fire visuals (flame/ember/smoke size, ignite radius) are all
-  // tuned in absolute px against a 600x600 canvas. Everything
-  // fire-related gets multiplied by this before use.
+  // tuned in absolute px against a 600x600 cloth. Everything
+  // fire-related gets multiplied by this before use. Stays keyed off
+  // the nominal cloth size, not the window, so fire scale doesn't
+  // quietly shift just because someone resized their browser.
   function fireScale() {
     return Math.min(WIDTH, HEIGHT) / 600;
   }
 
-  // Sizes the box the canvas actually sits in so it never blows past
-  // the viewport, while keeping the true pixel aspect ratio intact
-  function fitStage() {
-    const maxW = window.innerWidth * 0.92;
-    const maxH = window.innerHeight * 0.88;
+  // Recomputes everything that depends on "how big is the window" or
+  // "how big is the cloth right now": the renderer's actual pixel
+  // size, the camera scale/offset that places the cloth inside it, and
+  // the background canvas that has to cover the whole thing. Called on
+  // load, on window resize, and any time the cloth's own size changes.
+  function updateViewport() {
+    VIEW_W = window.innerWidth;
+    VIEW_H = window.innerHeight;
+
+    const maxW = VIEW_W * SAFE_AREA_W_FRAC;
+    const maxH = VIEW_H * SAFE_AREA_H_FRAC;
     const ar = WIDTH / HEIGHT;
-    let w = maxW, h = w / ar;
-    if (h > maxH) { h = maxH; w = h * ar; }
-    stageEl.style.width = w + 'px';
-    stageEl.style.height = h + 'px';
+    let dispW = maxW, dispH = dispW / ar;
+    if (dispH > maxH) { dispH = maxH; dispW = dispH * ar; }
+
+    clothScale = dispW / WIDTH; // == dispH / HEIGHT, same ratio either axis
+    originX = (VIEW_W - dispW) / 2;
+    originY = (VIEW_H - dispH) / 2;
+
+    worldRoot.scale.set(clothScale, clothScale);
+    worldRoot.position.set(originX, originY);
+
+    app.renderer.resize(VIEW_W, VIEW_H);
+    bgCanvas.width = VIEW_W;
+    bgCanvas.height = VIEW_H;
+    refreshBackgroundTexture();
   }
-  window.addEventListener('resize', fitStage);
+  window.addEventListener('resize', updateViewport);
 
   // PixiJS application, rendering into the existing <canvas id="c">.
   // resolution stays at 1 and autoDensity is left off on purpose --
@@ -95,8 +155,8 @@
   // would fight that rule.
   const app = new PIXI.Application({
     view: canvas,
-    width: WIDTH,
-    height: HEIGHT,
+    width: VIEW_W,
+    height: VIEW_H,
     resolution: 1,
     antialias: true,
     backgroundAlpha: 0,
@@ -106,7 +166,9 @@
   // Ask the GPU what it can actually handle, but don't go past 4K
   // regardless -- a hardcoded cap was clamping both W and H to the
   // same number before, so anything past it always came out square
-  // no matter what aspect ratio was typed in
+  // no matter what aspect ratio was typed in. This still governs the
+  // cloth's own WIDTH/HEIGHT (the texture and physics grid); the
+  // window itself is whatever it is and isn't clamped against this.
   const MAX_CANVAS_DIM = (() => {
     try {
       return Math.min(app.renderer.gl.getParameter(app.renderer.gl.MAX_TEXTURE_SIZE), 4096);
@@ -115,14 +177,24 @@
     }
   })();
 
-  // Background layer: sits behind everything else.
+  // Background layer sits behind everything else, sized to the full
+  // window (see updateViewport) and drawn directly -- it does NOT sit
+  // inside worldRoot, so it's untouched by the camera scale/offset and
+  // just fills the whole visible page edge to edge. Everything cloth-
+  // and fire-related lives inside worldRoot instead, which carries the
+  // camera transform: physics, mouse mapping, fire spawns etc. all
+  // keep working in the same 0..WIDTH/0..HEIGHT space they always
+  // have, Pixi just draws that space scaled and offset into whatever
+  // the actual browser window happens to be.
   const bgContainer = new PIXI.Container();
+  const worldRoot = new PIXI.Container();
   const clothContainer = new PIXI.Container();
   const smokeContainerObj = new PIXI.Container();
   const glowContainerObj = new PIXI.Container();
   const emberContainerObj = new PIXI.Container();
   const flameContainerObj = new PIXI.Container();
-  app.stage.addChild(bgContainer, clothContainer, smokeContainerObj, glowContainerObj, emberContainerObj, flameContainerObj);
+  worldRoot.addChild(clothContainer, smokeContainerObj, glowContainerObj, emberContainerObj, flameContainerObj);
+  app.stage.addChild(bgContainer, worldRoot);
 
   // Grid resolution now drives BOTH physics and the render mesh --
   // there's no separate "sub" render multiplier anymore, since the
@@ -142,10 +214,11 @@
 
   // Gap between the cloth and the canvas edge used to be a fixed 20px
   // on every side so the cloth read as a piece of fabric sitting inside
-  // a frame -- now that the canvas border itself can be toggled off,
-  // keeping that gap just left a dead margin of bare background around
-  // the image.
-  // Cloth now runs flush with the canvas edge; set this back above 0
+  // a bordered frame. There's no frame anymore -- the canvas border got
+  // removed for good -- so that gap would just be a dead margin of bare
+  // background around the image now instead of a cloth-inside-a-frame look.
+  // Cloth runs flush with the canvas edge, i.e. whatever you type into
+  // the width/height fields IS the cloth size. Set this back above 0
   // if a margin is ever wanted again.
   const CLOTH_GAP = 0;
 
@@ -179,10 +252,13 @@
 
   // Separate canvas + texture for the background layer. Default is
   // plain black -- same as the canvas has always looked -- so loading
-  // nothing here changes nothing about the current look.
+  // nothing here changes nothing about the current look. Sized to
+  // VIEW_W/VIEW_H (the actual browser window) since this layer sits
+  // outside worldRoot's camera transform and has to cover the whole
+  // visible page itself, independent of whatever size cloth is set.
   const bgCanvas = document.createElement('canvas');
-  bgCanvas.width = WIDTH;
-  bgCanvas.height = HEIGHT;
+  bgCanvas.width = VIEW_W;
+  bgCanvas.height = VIEW_H;
   const bgCtx = bgCanvas.getContext('2d');
 
   let bgImage = null;
@@ -191,15 +267,15 @@
 
   function drawBackgroundCanvas() {
     bgCtx.fillStyle = '#000000';
-    bgCtx.fillRect(0, 0, WIDTH, HEIGHT);
+    bgCtx.fillRect(0, 0, VIEW_W, VIEW_H);
     if (bgImage) {
       // Same "cover" fit as the cloth image: fill the frame, crop
       // whatever overhangs, no letterboxing.
       const iw = bgImage.naturalWidth || bgImage.width;
       const ih = bgImage.naturalHeight || bgImage.height;
-      const scale = Math.max(WIDTH / iw, HEIGHT / ih);
+      const scale = Math.max(VIEW_W / iw, VIEW_H / ih);
       const dw = iw * scale, dh = ih * scale;
-      const dx = (WIDTH - dw) / 2, dy = (HEIGHT - dh) / 2;
+      const dx = (VIEW_W - dw) / 2, dy = (VIEW_H - dh) / 2;
       bgCtx.drawImage(bgImage, dx, dy, dw, dh);
     }
   }
@@ -379,14 +455,11 @@
   function applyCanvasSize(w, h) {
     WIDTH = Math.max(64, Math.min(MAX_CANVAS_DIM, Math.round(w) || WIDTH));
     HEIGHT = Math.max(64, Math.min(MAX_CANVAS_DIM, Math.round(h) || HEIGHT));
+
     texCanvas.width = WIDTH;
     texCanvas.height = HEIGHT;
-    bgCanvas.width = WIDTH;
-    bgCanvas.height = HEIGHT;
-    app.renderer.resize(WIDTH, HEIGHT);
-    fitStage();
     resetCloth(false);
-    refreshBackgroundTexture();
+    updateViewport(); // re-fits the camera to the cloth's new size within the same window
   }
 
   // Cloth physics: Verlet integration + iterative distance-constraint
@@ -529,7 +602,14 @@
       p.x += vx + ax * dt * dt;
       p.y += vy + ay * dt * dt;
 
-      if (p.y > HEIGHT + clothBottomBleed() + 80) {
+      // Window bottom edge, converted from screen space back into the
+      // same nominal cloth space p.y lives in -- this is what "falls
+      // off the visible page" actually means now that the canvas is
+      // the whole window instead of a fixed box, so it stays correct
+      // through resizes and cloth-size changes without needing its
+      // own constant.
+      const fallLimit = (VIEW_H - originY) / clothScale + 40;
+      if (p.y > fallLimit) {
         p.destroyed = true;
         spawnAshPuff(p.x, HEIGHT + 20);
       }
@@ -1184,7 +1264,17 @@
     const rect = canvas.getBoundingClientRect();
     const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
     const cy = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
-    return { x: cx * (WIDTH / rect.width), y: cy * (HEIGHT / rect.height) };
+    // rect.width/height should already equal VIEW_W/VIEW_H (canvas is
+    // CSS 100% of a full-window stage), but scale through them anyway
+    // in case of any sub-pixel rounding -- then undo the camera's
+    // offset and zoom to land back in the same nominal cloth space
+    // the particles live in.
+    const screenX = cx * (VIEW_W / rect.width);
+    const screenY = cy * (VIEW_H / rect.height);
+    return {
+      x: (screenX - originX) / clothScale,
+      y: (screenY - originY) / clothScale,
+    };
   }
 
   canvas.addEventListener('mousemove', (e) => {
@@ -1327,16 +1417,6 @@
     gridToggleBtn.classList.toggle('is-on', showGrid);
   });
 
-  // Starts true since the stage ships with its border painted
-  let showBorder = true;
-  const borderToggleBtn = document.getElementById('borderToggleBtn');
-  borderToggleBtn.addEventListener('click', () => {
-    showBorder = !showBorder;
-    borderToggleBtn.textContent = 'Border: ' + (showBorder ? 'shown' : 'hidden');
-    borderToggleBtn.classList.toggle('is-on', showBorder);
-    stageEl.classList.toggle('no-border', !showBorder);
-  });
-
   // Canvas size controls:
   const sizePresets = {
     square: [1080, 1080],
@@ -1367,10 +1447,9 @@
   });
 
   // Main loop:
-  fitStage();
+  updateViewport();
   drawPlaceholderTexture();
   resetCloth(true);
-  refreshBackgroundTexture();
 
   let last = performance.now();
   function loop(now) {
