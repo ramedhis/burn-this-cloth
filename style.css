@@ -247,6 +247,9 @@
     flex: 1 1 0;
     border: none;
     border-right: 1px solid var(--line);
+    white-space: nowrap;
+    padding-left: 4px;
+    padding-right: 4px;
   }
 
   .anchor-btn:last-child { border-right: none; }
