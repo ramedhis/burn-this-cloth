@@ -115,6 +115,7 @@
     }
   })();
 
+  // Background layer: sits behind everything else.
   const bgContainer = new PIXI.Container();
   const clothContainer = new PIXI.Container();
   const smokeContainerObj = new PIXI.Container();
@@ -404,7 +405,7 @@
   const GRAVITY_BURN_EXTRA = 260; // weakened (but not yet cut) fibers sag a bit extra
   const PUSH_RADIUS = 110;
   const PUSH_STRENGTH = 3800;
-  const CUT_THRESHOLD = 0.55;
+  const CUT_THRESHOLD = 0.72;
   const CONSTRAINT_ITERATIONS = 5;
 
   // Wind: separate from the PUSH_* stuff above, which just shoves the
@@ -572,7 +573,11 @@
         const p = particles[idx(i, j)];
         if (p.destroyed || !p.burning) continue;
 
-        p.burn += dt * (0.5 + Math.random() * 0.35);
+        // Slowed down a bit (was 0.5 + rand*0.35) -- combined with the
+        // higher CUT_THRESHOLD above, this gives the char/fire-ring
+        // shading room to actually be seen instead of flashing by on
+        // the way to a hole.
+        p.burn += dt * (0.36 + Math.random() * 0.26);
 
         if (p.burn >= 0.35) {
           const neighbors = [[i - 1, j], [i + 1, j], [i, j - 1], [i, j + 1]];
@@ -772,19 +777,34 @@
       float shade = clamp(vShade, -1.0, 1.0);
       vec3 lit = clamp(fabricColor * (1.0 + shade * 0.85), 0.0, 1.0);
 
-      // Char: darkens and browns out smoothly with burn amount --
-      // continuous across the whole mesh since it's a per-pixel
-      // shader value, so there's no triangle-edge seam to fight the
-      // way the old multiply-rect-per-triangle pass had to.
-      vec3 charColor = mix(vec3(0.35, 0.22, 0.14), vec3(0.05, 0.03, 0.02), smoothstep(0.15, 0.85, t));
-      float charMix = smoothstep(0.05, 0.85, t);
-      vec3 scorched = mix(lit, lit * charColor * 2.2, charMix);
+      // Char: fabric burns down toward near-black charcoal well
+      // before the hole opens -- this is the "already burnt, cooling"
+      // band that rings any real burn hole, sitting between the
+      // untouched fabric and the active fire ring below. Widened so
+      // it reads as a real band of charred cloth, not a thin line.
+      vec3 charColor = vec3(0.045, 0.032, 0.026);
+      float charAmt = smoothstep(0.04, 0.50, t);
+      vec3 charred = mix(lit, charColor, charAmt);
 
-      // A thin band of ember glow right where a patch is actively
-      // burning through, before it's fully charred black.
-      float glow = smoothstep(0.35, 0.65, t) * (1.0 - smoothstep(0.65, 0.95, t));
-      vec3 emberColor = vec3(1.0, 0.5, 0.12);
-      vec3 finalColor = mix(scorched, emberColor, glow * 0.9);
+      // Fire ring: the actual combustion front. This is what was
+      // missing -- a band of near-white/yellow heat sitting right at
+      // the tearing edge, between the char and the hole, not smeared
+      // across the whole burn like a generic tint. It peaks just
+      // below CUT_THRESHOLD (0.72 on the JS side), so the brightest
+      // pixels are the ones about to become a hole, and fades back
+      // toward the char. Widened further (starts earlier) so it has
+      // real width instead of flashing by as a sliver.
+      float ring = smoothstep(0.30, 0.55, t) * (1.0 - smoothstep(0.55, 0.74, t));
+      vec3 emberColor = mix(vec3(1.0, 0.45, 0.08), vec3(1.0, 0.92, 0.62), smoothstep(0.34, 0.58, t));
+      vec3 finalColor = mix(charred, emberColor, ring);
+
+      // A small overexposed core right at the hottest sliver of the
+      // ring -- pushes those pixels toward blown-out white instead of
+      // just pale yellow, which is what actually reads as "glowing"
+      // rather than "painted yellow".
+      float hot = smoothstep(0.52, 0.64, t) * (1.0 - smoothstep(0.64, 0.74, t));
+      finalColor += vec3(0.5, 0.4, 0.25) * hot;
+      finalColor = clamp(finalColor, 0.0, 1.0);
 
       gl_FragColor = vec4(finalColor, texColor.a) * uColor;
 
@@ -793,9 +813,11 @@
       // otherwise a burning patch just vanishes as one clean wedge,
       // which is what made the tear line read as "triangle" instead
       // of "burnt cloth". noise-driven so the lace pattern doesn't
-      // line up with the grid underneath it.
+      // line up with the grid underneath it. Range shifted to sit
+      // right under the fire ring above, so what survives the grain
+      // right at the edge is still glowing, not already char-brown.
       float grain = hash(floor(vTextureCoord * 260.0));
-      float keepChance = mix(1.0, 0.1, smoothstep(0.28, 0.55, t));
+      float keepChance = mix(1.0, 0.1, smoothstep(0.38, 0.72, t));
       if (grain > keepChance) discard;
     }
   `;
