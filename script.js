@@ -144,6 +144,11 @@
     bgCanvas.width = VIEW_W;
     bgCanvas.height = VIEW_H;
     refreshBackgroundTexture();
+    // Same tradeoff as the background canvas above: resizing wipes
+    // whatever soot was stamped on it. Not ideal, but the window
+    // getting resized mid-burn is a rare enough edge case that it's
+    // not worth carrying pixel data across a full re-fit.
+    resetScorchLayer();
   }
   window.addEventListener('resize', updateViewport);
 
@@ -187,6 +192,16 @@
   // have, Pixi just draws that space scaled and offset into whatever
   // the actual browser window happens to be.
   const bgContainer = new PIXI.Container();
+  // Two more layers between the backdrop and the cloth, both living in
+  // plain screen space (not worldRoot) for the same reason bgContainer
+  // does -- they're stuck to the page, not to the cloth's own camera.
+  // scorchContainer holds the permanent soot stamped onto the backdrop
+  // as things burn through; bloomContainer is the dynamic warm light
+  // the fire throws onto that same backdrop while it's actively
+  // burning. Order matters: soot first so the light can fall on top of
+  // old marks the same way it'd fall across a clean backdrop.
+  const scorchContainer = new PIXI.Container();
+  const bloomContainer = new PIXI.Container();
   const worldRoot = new PIXI.Container();
   const clothContainer = new PIXI.Container();
   const smokeContainerObj = new PIXI.Container();
@@ -194,7 +209,7 @@
   const emberContainerObj = new PIXI.Container();
   const flameContainerObj = new PIXI.Container();
   worldRoot.addChild(clothContainer, smokeContainerObj, glowContainerObj, emberContainerObj, flameContainerObj);
-  app.stage.addChild(bgContainer, worldRoot);
+  app.stage.addChild(bgContainer, scorchContainer, bloomContainer, worldRoot);
 
   // Grid resolution now drives BOTH physics and the render mesh --
   // there's no separate "sub" render multiplier anymore, since the
@@ -288,6 +303,56 @@
     if (bgSprite) bgContainer.removeChild(bgSprite);
     bgSprite = new PIXI.Sprite(bgTexture);
     bgContainer.addChild(bgSprite);
+  }
+
+  // Persistent scorch layer. Right now the second a hole tears open in
+  // the mesh, the burn just disappears -- no trace it was ever there,
+  // like the fire event never happened. This is a plain 2D canvas
+  // sitting in screen space (same footprint as bgCanvas) that gets
+  // soot stamped onto it once, permanently, the moment a patch of
+  // cloth actually burns through. It's cheap because stamping only
+  // happens on that one transition, never per-frame.
+  const scorchCanvas = document.createElement('canvas');
+  scorchCanvas.width = VIEW_W;
+  scorchCanvas.height = VIEW_H;
+  const scorchCtx = scorchCanvas.getContext('2d');
+  let scorchTexture = null;
+  let scorchSprite = null;
+
+  function resetScorchLayer() {
+    scorchCanvas.width = VIEW_W;
+    scorchCanvas.height = VIEW_H;
+    scorchCtx.clearRect(0, 0, VIEW_W, VIEW_H);
+    if (scorchTexture) scorchTexture.destroy(true);
+    scorchTexture = PIXI.Texture.from(scorchCanvas);
+    scorchTexture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
+    if (scorchSprite) scorchContainer.removeChild(scorchSprite);
+    scorchSprite = new PIXI.Sprite(scorchTexture);
+    scorchContainer.addChild(scorchSprite);
+  }
+
+  // Stamps one soot smudge, given in cloth-space coordinates (same
+  // space particles live in) -- converted here into the scorch
+  // canvas's screen space using the same clothScale/originX/originY
+  // camera math everything else uses to cross that boundary. Multiply
+  // blend on purpose: a second stamp landing on an already-sooty spot
+  // should darken it further, not just stack more opacity on top,
+  // which is closer to what real charring does.
+  function stampScorch(cx, cy, radius, strength) {
+    const sx = originX + cx * clothScale;
+    const sy = originY + cy * clothScale;
+    const r = Math.max(1, radius * clothScale);
+    const g = scorchCtx.createRadialGradient(sx, sy, 0, sx, sy, r);
+    g.addColorStop(0, `rgba(12,9,7,${strength})`);
+    g.addColorStop(0.55, `rgba(12,9,7,${strength * 0.5})`);
+    g.addColorStop(1, 'rgba(12,9,7,0)');
+    scorchCtx.globalCompositeOperation = 'multiply';
+    scorchCtx.fillStyle = g;
+    scorchCtx.beginPath();
+    scorchCtx.arc(sx, sy, r, 0, Math.PI * 2);
+    scorchCtx.fill();
+    scorchCtx.globalCompositeOperation = 'source-over';
+    scorchTexture.update();
   }
 
   function drawPlaceholderTexture() {
@@ -427,6 +492,7 @@
           burn: 0,
           burning: false,
           destroyed: false,
+          scorched: false,
           heat: 0,
           destroyAt: 0.82 + Math.random() * 0.35,
           seed: Math.random() * 1000,
@@ -443,6 +509,8 @@
     flames.length = 0;
     embers.length = 0;
     smoke.length = 0;
+    ashFlakes.length = 0;
+    resetScorchLayer();
     if (!keepTexture) {
       if (sourceImage) loadImageCover(sourceImage);
       else drawPlaceholderTexture();
@@ -502,6 +570,16 @@
   const WIND_WAVE_DEPTH = 0.6;  // How much the ripple modulates the gust (0 = uniform push)
   const WIND_FLUTTER = 0.35;    // Extra sideways shimmer riding along the gust
   const MOUSE_SPEED_CAP = 4000; // px/s -- keeps one laggy frame from launching the cloth
+
+  // Flames get their own (much gentler) read on the same gust system,
+  // capped outright rather than just eased -- windPower can run into
+  // the thousands on a fast swipe (same range MOUSE_SPEED_CAP allows),
+  // which is fine as an acceleration term for the cloth's spring solver
+  // but was wildly too much as a direct per-frame position shift for
+  // an unconstrained sprite.
+  const FLAME_WIND_GAIN = 0.12;
+  const FLAME_LEAN_MAX = 90;
+  function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
   let mouse = { x: -9999, y: -9999, px: -9999, py: -9999, active: false, vx: 0, vy: 0, speed: 0 };
   let simTime = 0;   // Just keeps climbing, used to phase the wave and flutter
@@ -658,6 +736,18 @@
         // shading room to actually be seen instead of flashing by on
         // the way to a hole.
         p.burn += dt * (0.36 + Math.random() * 0.26);
+
+        // linkIntact() cuts a vertex's constraints at CUT_THRESHOLD --
+        // that's the actual instant a hole opens in the mesh, well
+        // before this particle counts as fully "destroyed" below. This
+        // is the one moment worth marking permanently: everything
+        // after it is just the torn flap falling away, but the mark of
+        // it having burned through belongs on the backdrop, not on a
+        // piece of cloth that's about to be gone.
+        if (!p.scorched && p.burn >= CUT_THRESHOLD) {
+          p.scorched = true;
+          stampScorch(p.x, p.y, (16 + Math.random() * 16) * fireScale(), 0.45 + Math.random() * 0.25);
+        }
 
         if (p.burn >= 0.35) {
           const neighbors = [[i - 1, j], [i + 1, j], [i, j - 1], [i, j + 1]];
@@ -1011,9 +1101,11 @@
   let flames = [];
   let embers = [];
   let smoke = [];
+  let ashFlakes = [];
   const MAX_FLAMES = 260;
   const MAX_EMBERS = 140;
   const MAX_SMOKE = 90;
+  const MAX_ASH = 120;
 
   function spawnFlame(x, y, sizeMul) {
     if (flames.length > MAX_FLAMES) return;
@@ -1030,6 +1122,16 @@
       wobble: Math.random() * Math.PI * 2,
       wobble2: Math.random() * Math.PI * 2,
       flicker: Math.random() * 10,
+      // How this particular tongue catches an ambient gust: lean is
+      // its current bend (eased toward the gust target rather than
+      // snapping to it), windRate is how fast it catches up, windMul
+      // is how strongly it responds at all. Randomized per-flame so a
+      // gust doesn't bend every flame on screen by the identical
+      // amount on the identical frame -- that perfect unison was what
+      // read as a cardboard cutout sliding rather than fire.
+      lean: 0,
+      windRate: 3 + Math.random() * 6,
+      windMul: 0.5 + Math.random() * 0.9,
     });
   }
 
@@ -1061,8 +1163,32 @@
     });
   }
 
+  // Everything that's ever destroyed the cloth so far reads as
+  // upward-drifting smoke -- true of the actual flame, but a burned-
+  // through patch should also leave something that falls and settles,
+  // or the destruction only ever reads as "gone," never as "landed
+  // somewhere." Flakes get a light gravity and a papery side-to-side
+  // flutter (same idea as a falling leaf) instead of a straight drop,
+  // which is what actually sells "weightless burnt scrap" over "small
+  // rock."
+  function spawnAshFlake(x, y) {
+    if (ashFlakes.length > MAX_ASH) return;
+    const fs = fireScale();
+    ashFlakes.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 30 * fs,
+      vy: -(8 + Math.random() * 18) * fs, // small kick from the burn itself before gravity takes over
+      life: 0,
+      maxLife: 2.2 + Math.random() * 2.6,
+      size: (1.4 + Math.random() * 2.4) * fs,
+      flutter: Math.random() * Math.PI * 2,
+    });
+  }
+
   function spawnAshPuff(x, y) {
     for (let k = 0; k < 4; k++) spawnSmoke(x, y);
+    const n = 2 + Math.floor(Math.random() * 4);
+    for (let k = 0; k < n; k++) spawnAshFlake(x, y);
   }
 
   function updateFire(dt) {
@@ -1092,7 +1218,32 @@
       // clean wave, so the tongue doesn't just swing side to
       // side on a metronomexpress
       const sway = Math.sin(f.wobble) * 16 + Math.sin(f.wobble2) * 7;
-      f.x += (f.vx + sway) * dt;
+
+      // f.lean eases toward the current gust rather than snapping to
+      // it -- a spring-solved cloth gets that smoothing for free from
+      // the constraint solver, but a flame sprite has nothing playing
+      // that role, so applying windPower directly (like the first
+      // pass at this did) made it read as the sprite being shoved,
+      // not bending. Each flame's own windRate/windMul (set at spawn)
+      // keeps every tongue catching the gust a little differently
+      // instead of the whole fire leaning over in one rigid unit.
+      //
+      // lean is a velocity-like quantity, same units as vx/sway right
+      // below it -- it gets summed with them and the whole thing is
+      // multiplied by dt once. An earlier pass at this also multiplied
+      // lean by an extra 30 on top, meant to make the bend feel
+      // stronger, but since windPower can run into the thousands
+      // (px/s, same range MOUSE_SPEED_CAP allows) that extra factor
+      // sent flames dozens to hundreds of pixels sideways in a single
+      // frame -- which doesn't read as "wind," it reads as the sprite
+      // teleporting, which is exactly the "duplicate trailing copies"
+      // look. FLAME_WIND_GAIN is its own (much smaller) gain than the
+      // cloth's WIND_GAIN for that reason, and the target is clamped
+      // outright so no cursor speed, however fast, can produce more
+      // than a firm-but-plausible push.
+      const gustTarget = clamp(windDirX * windPower * FLAME_WIND_GAIN * f.windMul, -FLAME_LEAN_MAX, FLAME_LEAN_MAX);
+      f.lean += (gustTarget - f.lean) * Math.min(1, f.windRate * dt);
+      f.x += (f.vx + sway + f.lean) * dt;
 
       // Hot gas shoots up fast right off the fuel, then that push
       // dies out and it's just drifting/cooling like before
@@ -1113,6 +1264,13 @@
       s.y += s.vy * dt;
       s.vy *= 0.99; // Rises fast off the flame, then spreads out and loiters
       s.size += dt * (12 + s.life * 6); // billows out faster the older/cooler it gets
+    });
+
+    stepList(ashFlakes, (a) => {
+      a.flutter += dt * 4;
+      a.vy += 55 * dt; // much lighter than an ember's fall -- this is ash, not a spark
+      a.x += (a.vx + Math.sin(a.flutter) * 18) * dt;
+      a.y += a.vy * dt;
     });
   }
 
@@ -1143,6 +1301,12 @@
   const glowTex = makeRadialTexture(96, [
     [0, 'rgba(255,200,120,0.55)'], [0.5, 'rgba(255,140,40,0.25)'], [1, 'rgba(255,140,40,0)'],
   ]);
+  const ashTex = makeRadialTexture(24, [
+    [0, 'rgba(96,90,84,0.9)'], [0.55, 'rgba(64,60,56,0.55)'], [1, 'rgba(64,60,56,0)'],
+  ]);
+  const bloomTex = makeRadialTexture(128, [
+    [0, 'rgba(255,150,60,0.5)'], [0.5, 'rgba(255,110,30,0.22)'], [1, 'rgba(255,110,30,0)'],
+  ]);
 
   function makePool(container, texture, count, blend) {
     const pool = [];
@@ -1160,6 +1324,15 @@
   const flamePool = makePool(flameContainerObj, flameTex, MAX_FLAMES + 10, true);
   const emberPool = makePool(emberContainerObj, emberTex, MAX_EMBERS + 10, true);
   const smokePool = makePool(smokeContainerObj, smokeTex, MAX_SMOKE + 10, false);
+  // Ash rides in the smoke layer, not its own -- it's the same "what's
+  // left after the fire" family visually, just heavier and falling
+  // instead of rising, so there's no reason to give it a separate
+  // container in the render order.
+  const ashPool = makePool(smokeContainerObj, ashTex, MAX_ASH + 10, false);
+  // Bloom lights live in screen-space bloomContainer, defined up near
+  // bgContainer -- see updateBloom() below for how they're placed.
+  const MAX_BLOOM_LIGHTS = 18;
+  const bloomPool = makePool(bloomContainer, bloomTex, MAX_BLOOM_LIGHTS, true);
 
   // Rebuilt whenever the grid resolution or canvas size changes,
   // since it needs exactly one sprite per grid particle.
@@ -1225,7 +1398,7 @@
       const stretch = 1 + 0.9 * t; // and stretches into a tongue
       s.width = f.size * 2 * taper;
       s.height = f.size * 2.6 * stretch;
-      s.rotation = Math.max(-0.35, Math.min(0.35, f.vx / 90)); // Leans with its own drift
+      s.rotation = Math.max(-0.4, Math.min(0.4, f.vx / 90 + f.lean / 130)); // Leans with its own drift, plus wherever the wind's currently bending it
       const shimmer = 0.85 + Math.sin(f.flicker + f.life * 40) * 0.15;
       s.alpha = Math.max(0, (1 - t) * shimmer);
       s.tint = flameColorAt(t);
@@ -1257,6 +1430,70 @@
       (s, t) => lerpColor(0x201d1a, 0x6a6a66, t), // Starts as dark soot, thins out grey
       (s) => s.size * 1.6,
       (s, t) => Math.pow(1 - t, 1.4) * 0.8);
+    applyPool(ashPool, ashFlakes,
+      (a, t) => lerpColor(0x6a635b, 0x38332f, t), // Cools from warm grey ash toward dead soot as it falls
+      (a) => a.size * 3,
+      (a, t) => Math.pow(1 - t, 1.2) * 0.85);
+  }
+
+  // Firelight doesn't politely stay inside the cloth's own silhouette
+  // -- in reality it throws warm light across whatever's behind the
+  // burning fabric too. bgContainer/scorchContainer sit outside
+  // worldRoot's camera transform (same reason the backdrop itself
+  // does), so the existing per-vertex glowPool -- which lives inside
+  // worldRoot and lights the cloth mesh itself -- can't reach it; this
+  // needs its own pass in plain screen space. Rather than one bloom
+  // sprite per burning vertex (expensive, and a wash of a hundred
+  // overlapping blobs just reads as mush), burning particles get
+  // bucketed into a coarse grid and only the handful of hottest
+  // buckets actually get a light, placed at that bucket's intensity-
+  // weighted centroid. Bucket count stays fixed regardless of mesh
+  // density, so this stays cheap even at the "fine" grid setting.
+  const BLOOM_GRID = 8;
+  const bloomWeight = new Float32Array(BLOOM_GRID * BLOOM_GRID);
+  const bloomSumX = new Float32Array(BLOOM_GRID * BLOOM_GRID);
+  const bloomSumY = new Float32Array(BLOOM_GRID * BLOOM_GRID);
+  let bloomOrder = [];
+
+  function updateBloom() {
+    bloomWeight.fill(0);
+    bloomSumX.fill(0);
+    bloomSumY.fill(0);
+
+    for (let n = 0; n < particles.length; n++) {
+      const p = particles[n];
+      if (p.destroyed || (!p.burning && p.burn <= 0)) continue;
+      const w = Math.min(p.burn, 1);
+      const bx = Math.min(BLOOM_GRID - 1, Math.max(0, Math.floor((p.x / WIDTH) * BLOOM_GRID)));
+      const by = Math.min(BLOOM_GRID - 1, Math.max(0, Math.floor((p.y / HEIGHT) * BLOOM_GRID)));
+      const b = by * BLOOM_GRID + bx;
+      bloomWeight[b] += w;
+      bloomSumX[b] += p.x * w;
+      bloomSumY[b] += p.y * w;
+    }
+
+    bloomOrder.length = 0;
+    for (let b = 0; b < bloomWeight.length; b++) {
+      if (bloomWeight[b] > 0.05) bloomOrder.push(b);
+    }
+    bloomOrder.sort((a, b) => bloomWeight[b] - bloomWeight[a]);
+
+    for (let k = 0; k < bloomPool.length; k++) {
+      const s = bloomPool[k];
+      if (k >= bloomOrder.length) { s.visible = false; continue; }
+      const b = bloomOrder[k];
+      const w = bloomWeight[b];
+      const cx = bloomSumX[b] / w;
+      const cy = bloomSumY[b] / w;
+
+      s.visible = true;
+      s.x = originX + cx * clothScale;
+      s.y = originY + cy * clothScale;
+      const sizePx = (150 + w * 24) * clothScale;
+      s.width = sizePx; s.height = sizePx;
+      const flicker = 0.85 + Math.sin(simTime * 13 + b * 7) * 0.15;
+      s.alpha = Math.min(1, 0.5 + w * 0.05) * flicker;
+    }
   }
 
   // Input
@@ -1293,10 +1530,16 @@
     e.preventDefault();
   }, { passive: false });
 
-  function ignite(pos) {
+  function ignite(pos, opts) {
+    // strength scales down both the catch radius and how much burn a
+    // touch actually deposits -- used to make a held drag lay down a
+    // trail of light touches (like dragging a lit match) instead of
+    // spamming full click-strength bursts dozens of times a second.
+    const strength = (opts && opts.strength != null) ? opts.strength : 1;
+
     // Roll a random patch size per click -- sometimes it's a small
     // lick of flame, sometimes a proper spreading blaze right away
-    const radius = (14 + Math.random() * 70) * fireScale();
+    const radius = (14 + Math.random() * 70) * fireScale() * strength;
     const radiusSq = radius * radius;
     let hitAny = false;
 
@@ -1309,7 +1552,7 @@
       hitAny = true;
       p.burning = true;
       const falloff = 1 - Math.sqrt(d) / radius;
-      const startBurn = 0.05 + falloff * 0.25 * Math.random();
+      const startBurn = (0.05 + falloff * 0.25 * Math.random()) * strength;
       if (p.burn < startBurn) p.burn = startBurn;
     }
 
@@ -1330,27 +1573,54 @@
     // The sprite burst land -- separate roll from the cloth-patch
     // radius above, so a click can catch a wide patch of cloth but
     // still only throw out one big flame, or the other way around.
+    // sizeMul below is additionally scaled by strength so a dragged
+    // touch throws small licks instead of full click-sized tongues --
+    // matters most at strength<1, where this fires many times a
+    // second as you drag.
     const roll = Math.random();
     if (roll < 0.3) {
       // One flame, but a proper tall one
-      spawnFlame(pos.x, pos.y, 2.2 + Math.random() * 1.6);
+      spawnFlame(pos.x, pos.y, (2.2 + Math.random() * 1.6) * strength);
     } else if (roll < 0.6) {
       // A handful of small ones
       const n = 3 + Math.floor(Math.random() * 4);
       for (let k = 0; k < n; k++) {
-        spawnFlame(pos.x, pos.y, 0.5 + Math.random() * 0.5);
+        spawnFlame(pos.x, pos.y, (0.5 + Math.random() * 0.5) * strength);
       }
     } else {
       // Ordinary mixed burst
       const n = 1 + Math.floor(Math.random() * 3);
       for (let k = 0; k < n; k++) {
-        spawnFlame(pos.x, pos.y, 0.8 + Math.random() * 1.3);
+        spawnFlame(pos.x, pos.y, (0.8 + Math.random() * 1.3) * strength);
       }
     }
   }
 
-  canvas.addEventListener('click', (e) => { ignite(getPos(e)); });
-  canvas.addEventListener('touchstart', (e) => { ignite(getPos(e)); }, { passive: true });
+  // pointerDown + dragIgniteTimer drive the "drag a lit match across
+  // the cloth" behavior in the main loop below: the initial press
+  // still lands one full-strength ignite() immediately (so a plain
+  // tap/click feels exactly like it always did), and holding it down
+  // afterward keeps lighting lighter touches along wherever the
+  // cursor drifts, throttled by DRAG_IGNITE_INTERVAL rather than
+  // firing once a frame.
+  let pointerDown = false;
+  let dragIgniteTimer = 0;
+  const DRAG_IGNITE_INTERVAL = 0.045;
+
+  canvas.addEventListener('mousedown', (e) => {
+    pointerDown = true;
+    dragIgniteTimer = DRAG_IGNITE_INTERVAL;
+    ignite(getPos(e));
+  });
+  window.addEventListener('mouseup', () => { pointerDown = false; });
+
+  canvas.addEventListener('touchstart', (e) => {
+    pointerDown = true;
+    dragIgniteTimer = DRAG_IGNITE_INTERVAL;
+    ignite(getPos(e));
+  }, { passive: true });
+  canvas.addEventListener('touchend', () => { pointerDown = false; });
+  canvas.addEventListener('touchcancel', () => { pointerDown = false; });
 
   document.getElementById('fileInput').addEventListener('change', (e) => {
     const file = e.target.files[0];
@@ -1455,11 +1725,25 @@
   function loop(now) {
     const dt = (now - last) / 1000;
     last = now;
+
+    // Held-down dragging lights a trail as it goes, throttled by time
+    // rather than by mousemove events -- a fast swipe shouldn't get
+    // MORE ignition points than a slow one just because it fired more
+    // mousemove events along the way.
+    if (pointerDown && mouse.active) {
+      dragIgniteTimer -= dt;
+      if (dragIgniteTimer <= 0) {
+        ignite({ x: mouse.x, y: mouse.y }, { strength: 0.5 });
+        dragIgniteTimer = DRAG_IGNITE_INTERVAL;
+      }
+    }
+
     stepCloth(dt);
     updateFire(dt);
     updateMeshBuffers();
     drawGrid();
     updateFireSprites();
+    updateBloom();
     try {
       app.renderer.render(app.stage);
     } catch (err) {
