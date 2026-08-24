@@ -269,16 +269,92 @@
 
   .cloth-frame.active { opacity: 1; }
 
-  /* Sits on the frame's own top edge, straddling it (translateY -50%)
-     the way a tab sits on a folder edge, so it reads as attached to
-     the rectangle rather than floating above it. Only clickable once
-     the frame is active -- pointer-events stays off otherwise so an
-     invisible toolbar can't quietly eat a click meant for the cloth. */
+  /* The four grab strips laid along the frame's edges. Sized a bit
+     thicker than the 1px border they sit on (12px) so there's an
+     actual target to grab rather than a hairline -- pointer-events
+     stays off until the frame is .active, same rule the toolbar
+     already follows, so an idle frame still can't eat a click meant
+     for the cloth/canvas underneath it. z-index keeps them below the
+     toolbar specifically, since the top strip and the toolbar overlap
+     near the middle of the top edge. */
+  .cloth-edge-handle {
+    position: absolute;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .cloth-frame.active .cloth-edge-handle {
+    pointer-events: auto;
+    cursor: move;
+  }
+
+  .cloth-edge-handle.edge-top,
+  .cloth-edge-handle.edge-bottom {
+    left: 0; right: 0;
+    height: 12px;
+  }
+  .cloth-edge-handle.edge-top { top: -6px; }
+  .cloth-edge-handle.edge-bottom { bottom: -6px; }
+
+  .cloth-edge-handle.edge-left,
+  .cloth-edge-handle.edge-right {
+    top: 0; bottom: 0;
+    width: 12px;
+  }
+  .cloth-edge-handle.edge-left { left: -6px; }
+  .cloth-edge-handle.edge-right { right: -6px; }
+
+  /* Shift turns the four edges from move handles into resize handles --
+     same elements, just a different cursor and a different mousedown
+     branch in script.js (which checks e.shiftKey). */
+  .cloth-frame.shift-armed .cloth-edge-handle.edge-top,
+  .cloth-frame.shift-armed .cloth-edge-handle.edge-bottom {
+    cursor: ns-resize;
+  }
+  .cloth-frame.shift-armed .cloth-edge-handle.edge-left,
+  .cloth-frame.shift-armed .cloth-edge-handle.edge-right {
+    cursor: ew-resize;
+  }
+
+  /* Small squares sitting right on the frame's four corners -- resize
+     both dimensions at once, so unlike the edges they don't have a
+     Shift-less "move" role to fall back to. Kept off entirely (pointer-
+     events:none) until Shift is actually down, not just until the frame
+     is active, since a bare hover with no modifier key should still let
+     a click at the very corner fall through to a move-drag on whichever
+     edge strip it overlaps rather than being eaten by a handle with
+     nothing to do. z-index puts them above both the edge strips and the
+     toolbar, so the exact corner pixel always resolves to "resize" once
+     Shift is down, even where a strip happens to run underneath it. */
+  .cloth-corner-handle {
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  .cloth-frame.active.shift-armed .cloth-corner-handle {
+    pointer-events: auto;
+  }
+
+  .cloth-corner-handle.corner-tl { top: -8px; left: -8px; cursor: nwse-resize; }
+  .cloth-corner-handle.corner-br { bottom: -8px; right: -8px; cursor: nwse-resize; }
+  .cloth-corner-handle.corner-tr { top: -8px; right: -8px; cursor: nesw-resize; }
+  .cloth-corner-handle.corner-bl { bottom: -8px; left: -8px; cursor: nesw-resize; }
+
+  /* Both groups sit on the frame's own top edge, straddling it
+     (translateY -50%) the way a tab sits on a folder edge, so they
+     read as attached to the rectangle rather than floating above it.
+     Only clickable once the frame is active -- pointer-events stays
+     off otherwise so an invisible toolbar can't quietly eat a click
+     meant for the cloth. Left/right positioning itself lives in the
+     -left/-right modifiers below, since the two groups anchor to
+     opposite edges instead of sharing one centered position. */
   .cloth-toolbar {
     position: absolute;
     top: 0;
-    left: 50%;
-    transform: translate(-50%, -50%);
+    transform: translateY(-50%);
     display: flex;
     gap: 6px;
     opacity: 0;
@@ -286,10 +362,55 @@
     transition: opacity 0.15s ease;
   }
 
+  /* The frame's box is FRAME_GAP (16px in script.js) wider than the
+     cloth on every side, so "left:0"/"right:0" here would line these
+     groups up with the FRAME, not the cloth itself. Offsetting by
+     that same 16px is what makes Load's left edge and Remove's right
+     edge actually land flush with the cloth's own left/right edges --
+     if FRAME_GAP ever changes in script.js, this 16px needs to follow
+     it to stay lined up. */
+  .cloth-toolbar-left { left: 16px; }
+  .cloth-toolbar-right { right: 16px; }
+
   .cloth-frame.active .cloth-toolbar {
     opacity: 1;
     pointer-events: auto;
+    z-index: 2; /* above .cloth-edge-handle, so the top strip never steals a click meant for these buttons */
   }
+
+  /* Shift + actually hovering one of the resize handles (tracked in JS,
+     since plain CSS has no way to react to a sibling's hover state) --
+     hides the toolbar so it can't visually fight with, or accidentally
+     eat a click meant for, the top edge/corner handles it overlaps. */
+  .cloth-frame.shift-hint .cloth-toolbar {
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+
+  /* Slapped on <body> for the duration of a cloth drag (see script.js)
+     so the "move" cursor holds steady even if the pointer briefly
+     outruns the 12px handle strip mid-drag, instead of flickering back
+     to the default arrow every time that happens. Same idea for a
+     resize drag, just with four possible cursor shapes instead of one
+     -- script.js picks whichever class matches the handle that started
+     the drag. */
+  body.cloth-dragging,
+  body.cloth-dragging *,
+  body.cloth-resizing-ns,
+  body.cloth-resizing-ns *,
+  body.cloth-resizing-ew,
+  body.cloth-resizing-ew *,
+  body.cloth-resizing-nwse,
+  body.cloth-resizing-nwse *,
+  body.cloth-resizing-nesw,
+  body.cloth-resizing-nesw * {
+    cursor: move !important;
+  }
+  body.cloth-resizing-ns, body.cloth-resizing-ns * { cursor: ns-resize !important; }
+  body.cloth-resizing-ew, body.cloth-resizing-ew * { cursor: ew-resize !important; }
+  body.cloth-resizing-nwse, body.cloth-resizing-nwse * { cursor: nwse-resize !important; }
+  body.cloth-resizing-nesw, body.cloth-resizing-nesw * { cursor: nesw-resize !important; }
+
 
   .cloth-tool-btn {
     appearance: none;

@@ -66,15 +66,44 @@
            anchor itself to the rectangle's own top edge in CSS
            (see .cloth-toolbar) rather than needing its own JS math. -->
       <div class="cloth-frame" id="clothFrame">
-        <div class="cloth-toolbar" id="clothToolbar">
+        <!-- Drag handles: thin strips along each edge of the frame,
+             invisible like the frame itself, only clickable while
+             .active (see .cloth-frame.active .cloth-edge-handle in
+             style.css). Grabbing one and moving the pointer drags the
+             whole cloth around; holding Shift first turns it into a
+             one-axis resize instead (script.js reads data-resize to
+             know which of WIDTH/HEIGHT that edge controls). Corner
+             squares below are resize-only, both axes at once, and only
+             turn clickable while Shift is actually held. Either way
+             script.js clamps the result so the cloth can't leave the
+             safe-area box. -->
+        <div class="cloth-resize-handle cloth-edge-handle edge-top" data-resize="top"></div>
+        <div class="cloth-resize-handle cloth-edge-handle edge-bottom" data-resize="bottom"></div>
+        <div class="cloth-resize-handle cloth-edge-handle edge-left" data-resize="left"></div>
+        <div class="cloth-resize-handle cloth-edge-handle edge-right" data-resize="right"></div>
+        <div class="cloth-resize-handle cloth-corner-handle corner-tl" data-resize="top left"></div>
+        <div class="cloth-resize-handle cloth-corner-handle corner-tr" data-resize="top right"></div>
+        <div class="cloth-resize-handle cloth-corner-handle corner-bl" data-resize="bottom left"></div>
+        <div class="cloth-resize-handle cloth-corner-handle corner-br" data-resize="bottom right"></div>
+
+        <!-- Two separate groups instead of one centered toolbar, each
+             pinned to line up with the cloth's own edge rather than
+             the frame's (the frame is FRAME_GAP px wider on every
+             side -- see positionClothFrame() in script.js -- so
+             "left:0" here would line up with the frame, not the
+             cloth). .cloth-toolbar-left/-right in style.css offset by
+             that same FRAME_GAP to correct for it. -->
+        <div class="cloth-toolbar cloth-toolbar-left" id="clothToolbarLeft">
           <label class="cloth-tool-btn file-btn" id="loadImageBtn" title="Load image">
             Load
             <input type="file" id="fileInput" accept="image/*" />
           </label>
-          <button type="button" id="removeImageBtn" class="cloth-tool-btn" title="Remove image">Remove</button>
+          <button type="button" id="removeImageBtn" class="cloth-tool-btn" title="Unload image">Unload</button>
           <button type="button" id="densityBtn" class="cloth-tool-btn">Density</button>
           <button type="button" id="gridToggleBtn" class="cloth-tool-btn">Mesh</button>
-          <button type="button" id="clothCloseBtn" class="cloth-tool-btn cloth-close-btn" title="Close panel">Close</button>
+        </div>
+        <div class="cloth-toolbar cloth-toolbar-right" id="clothToolbarRight">
+          <button type="button" id="clothCloseBtn" class="cloth-tool-btn cloth-close-btn" title="Remove cloth">Remove</button>
         </div>
       </div>
     </div>

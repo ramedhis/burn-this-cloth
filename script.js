@@ -109,6 +109,21 @@
   let clothScale = 1;
   let originX = 0, originY = 0;
 
+  // How far the cloth has been dragged away from its natural centered
+  // spot, in screen px (0,0 = centered, which is where everything
+  // starts out). This is the one piece of camera state that survives
+  // a resize or a re-fit -- a drag is a deliberate placement choice,
+  // so it sticks around and just gets re-clamped against wherever the
+  // safe box ends up, instead of snapping back to center every time.
+  let dragOffsetX = 0, dragOffsetY = 0;
+
+  // The rectangle dragOffsetX/Y gets clamped against -- same box the
+  // SAFE_AREA fractions below already carve out of the window, just
+  // kept here as its own left/top/right/bottom so the drag handler
+  // can clamp against it directly instead of re-deriving the fit math
+  // on every single mousemove. Filled in by applyCameraTransform().
+  let safeBoxLeft = 0, safeBoxTop = 0, safeBoxRight = 0, safeBoxBottom = 0;
+
   // Screen-space box the cloth actually occupies right now (derived
   // from originX/originY/clothScale + WIDTH/HEIGHT above). Kept as its
   // own set of variables, refreshed by updateViewport(), so the hover
@@ -126,15 +141,18 @@
     return Math.min(WIDTH, HEIGHT) / 600;
   }
 
-  // Recomputes everything that depends on "how big is the window" or
-  // "how big is the cloth right now": the renderer's actual pixel
-  // size, the camera scale/offset that places the cloth inside it, and
-  // the background canvas that has to cover the whole thing. Called on
-  // load, on window resize, and any time the cloth's own size changes.
-  function updateViewport() {
-    VIEW_W = window.innerWidth;
-    VIEW_H = window.innerHeight;
-
+  // Just the "where does the cloth sit, and how big" half of the
+  // camera math -- everything updateViewport() does EXCEPT the parts
+  // that are actually expensive (resizing the renderer, re-painting
+  // the background/scorch canvases). Pulled out on its own so the
+  // drag handler below can call it on every mousemove without dragging
+  // all that other work along for the ride.
+  //
+  // dispW/dispH (the cloth's fitted on-screen size) only depend on
+  // WIDTH/HEIGHT/VIEW_W/VIEW_H, none of which change mid-drag, so
+  // recomputing them here each call is redundant but cheap -- far
+  // cheaper than caching them and risking them going stale.
+  function applyCameraTransform() {
     const maxW = VIEW_W * SAFE_AREA_W_FRAC;
     const maxH = VIEW_H * SAFE_AREA_H_FRAC;
     const ar = WIDTH / HEIGHT;
@@ -142,8 +160,46 @@
     if (dispH > maxH) { dispH = maxH; dispW = dispH * ar; }
 
     clothScale = dispW / WIDTH; // == dispH / HEIGHT, same ratio either axis
-    originX = (VIEW_W - dispW) / 2;
-    originY = (VIEW_H - dispH) / 2;
+
+    // The safe box is the same maxW x maxH rectangle the fit above is
+    // computed against, just centered in the window rather than sized
+    // to it. It's deliberately NOT "wherever the cloth happens to be
+    // centered" -- those two only match when dispW/dispH actually hit
+    // maxW/maxH, which a non-square cloth in a differently-shaped
+    // window usually won't. Anchoring drag to the fixed safe box
+    // (rather than to the cloth's own centered rect) is what keeps the
+    // draggable range the same invisible box people already see
+    // implied by the layout, regardless of the cloth's aspect ratio.
+    safeBoxLeft = (VIEW_W - maxW) / 2;
+    safeBoxTop = (VIEW_H - maxH) / 2;
+    safeBoxRight = safeBoxLeft + maxW;
+    safeBoxBottom = safeBoxTop + maxH;
+
+    const centeredX = (VIEW_W - dispW) / 2;
+    const centeredY = (VIEW_H - dispH) / 2;
+
+    // Desired position is "centered, plus however far it's been
+    // dragged" -- then clamped so the cloth's own rect never pokes
+    // outside the safe box. maxOriginX/Y can dip below minOriginX/Y if
+    // the cloth is ever bigger than the safe box itself (shouldn't
+    // happen given how dispW/dispH are fit above, but the Math.max
+    // guards against a negative-width clamp range just in case).
+    const minOriginX = safeBoxLeft;
+    const maxOriginX = Math.max(minOriginX, safeBoxRight - dispW);
+    const minOriginY = safeBoxTop;
+    const maxOriginY = Math.max(minOriginY, safeBoxBottom - dispH);
+
+    originX = Math.max(minOriginX, Math.min(maxOriginX, centeredX + dragOffsetX));
+    originY = Math.max(minOriginY, Math.min(maxOriginY, centeredY + dragOffsetY));
+
+    // Fold the clamp back into dragOffsetX/Y so it's the offset that's
+    // authoritative going forward, not the origin -- next time the
+    // window resizes (and centeredX/Y shift under it), the cloth
+    // should still read as "dragged this far from center," not silently
+    // re-derive a new offset from wherever the clamp last happened to
+    // land it.
+    dragOffsetX = originX - centeredX;
+    dragOffsetY = originY - centeredY;
 
     clothRectLeft = originX;
     clothRectTop = originY;
@@ -153,6 +209,18 @@
 
     worldRoot.scale.set(clothScale, clothScale);
     worldRoot.position.set(originX, originY);
+  }
+
+  // Recomputes everything that depends on "how big is the window" or
+  // "how big is the cloth right now": the renderer's actual pixel
+  // size, the camera scale/offset that places the cloth inside it, and
+  // the background canvas that has to cover the whole thing. Called on
+  // load, on window resize, and any time the cloth's own size changes.
+  function updateViewport() {
+    VIEW_W = window.innerWidth;
+    VIEW_H = window.innerHeight;
+
+    applyCameraTransform();
 
     app.renderer.resize(VIEW_W, VIEW_H);
     bgCanvas.width = VIEW_W;
@@ -1939,6 +2007,249 @@
     clothFrame.classList.remove('active');
   });
 
+  // Dragging the cloth around by its frame -- or, holding Shift,
+  // resizing it instead. The frame rectangle itself stays
+  // pointer-events:none like before (so it never steals a click meant
+  // for the cloth underneath); what's actually grabbable is the four
+  // edge strips (.cloth-edge-handle, added earlier) plus four small
+  // corner squares (.cloth-corner-handle, HTML) sitting right on the
+  // frame's own corners. Edges do double duty -- move when Shift is up,
+  // resize just that one side when it's down -- corners are resize-only
+  // and only turn on (pointer-events) while Shift is actually held, via
+  // .cloth-frame.shift-armed in style.css.
+  const dragHandles = document.querySelectorAll('.cloth-resize-handle');
+
+  let clothDragging = false;
+  let dragStartClientX = 0, dragStartClientY = 0;
+  let dragStartOffsetX = 0, dragStartOffsetY = 0;
+
+  function beginClothDrag(clientX, clientY) {
+    // isClothGone() also means there's nothing left for the frame to
+    // trace -- see the same check in the main loop below, which is
+    // what actually pulls .active off the frame once the cloth is
+    // gone. Belt-and-suspenders here in case a drag somehow starts in
+    // the one-frame gap before that check runs.
+    if (isClothGone()) return;
+    clothDragging = true;
+    dragStartClientX = clientX;
+    dragStartClientY = clientY;
+    dragStartOffsetX = dragOffsetX;
+    dragStartOffsetY = dragOffsetY;
+    // The push/ignite physics reads mouse.x/y every frame regardless
+    // of whether the cursor is actually still over the canvas, so
+    // without this the cloth would keep getting shoved around by
+    // wherever the pointer was the instant before the drag grabbed it.
+    mouse.active = false;
+    document.body.classList.add('cloth-dragging');
+  }
+
+  function updateClothDrag(clientX, clientY) {
+    if (!clothDragging) return;
+    dragOffsetX = dragStartOffsetX + (clientX - dragStartClientX);
+    dragOffsetY = dragStartOffsetY + (clientY - dragStartClientY);
+    applyCameraTransform(); // re-clamps against the safe box and moves everything to match
+  }
+
+  function endClothDrag() {
+    clothDragging = false;
+    document.body.classList.remove('cloth-dragging');
+  }
+
+  // Resizing: dragging a side changes WIDTH and/or HEIGHT (the cloth's
+  // actual nominal size, same numbers the width/height fields and
+  // Apply button already control) rather than some separate on-screen
+  // zoom -- which is exactly why it can't get past the safe-area lines:
+  // applyCanvasSize()/updateViewport() always re-fits whatever size
+  // comes out of this to the biggest box that fits inside the safe
+  // area, same as typing a size in by hand always has.
+  //
+  // Rebuilding the cloth (resetCloth, inside applyCanvasSize) isn't
+  // free, so a live drag doesn't call it on every single mousemove --
+  // updateClothResize() just tracks where the pointer wants the size to
+  // be, and the main loop below actually applies it a few times a
+  // second (see RESIZE_APPLY_INTERVAL), the same throttle-a-continuous-
+  // gesture trick DRAG_IGNITE_INTERVAL already uses for the lit-match drag.
+  const RESIZE_APPLY_INTERVAL = 0.05;
+
+  let resizing = false;
+  let resizeSides = [];
+  let resizeStartWidth = 0, resizeStartHeight = 0;
+  let resizeStartClientX = 0, resizeStartClientY = 0;
+  let resizeStartScale = 1;
+  let resizeAnchorScreenX = 0, resizeAnchorScreenY = 0;
+  let resizeCursorClass = '';
+  let resizeApplyTimer = 0;
+  let resizePendingWidth = 0, resizePendingHeight = 0;
+  let resizeHasPending = false;
+
+  function cursorClassForSides(sides) {
+    const hasV = sides.includes('top') || sides.includes('bottom');
+    const hasH = sides.includes('left') || sides.includes('right');
+    if (hasV && hasH) {
+      const leaningTLBR = (sides.includes('top') && sides.includes('left')) ||
+                           (sides.includes('bottom') && sides.includes('right'));
+      return leaningTLBR ? 'cloth-resizing-nwse' : 'cloth-resizing-nesw';
+    }
+    return hasV ? 'cloth-resizing-ns' : 'cloth-resizing-ew';
+  }
+
+  function beginClothResize(sides, clientX, clientY) {
+    if (isClothGone()) return;
+    resizing = true;
+    resizeSides = sides;
+    resizeStartWidth = WIDTH;
+    resizeStartHeight = HEIGHT;
+    resizeStartClientX = clientX;
+    resizeStartClientY = clientY;
+    resizeStartScale = clothScale;
+    resizePendingWidth = WIDTH;
+    resizePendingHeight = HEIGHT;
+    resizeHasPending = false;
+    resizeApplyTimer = 0;
+
+    const hasTop = sides.includes('top'), hasBottom = sides.includes('bottom');
+    const hasLeft = sides.includes('left'), hasRight = sides.includes('right');
+
+    // Anchor = the point that stays visually put while the grabbed
+    // side(s) follow the cursor, same idea as a Photoshop free-transform
+    // handle leaving the opposite corner planted. When an axis isn't
+    // part of this handle at all (e.g. the plain right-edge handle only
+    // touches width), there's no "opposite edge" to anchor to on that
+    // axis, so it anchors to the rect's own center instead -- otherwise
+    // a pure width-only drag would still visually creep up/down
+    // whenever the aspect-ratio change nudges the fitted height.
+    resizeAnchorScreenX = hasRight ? clothRectLeft : hasLeft ? clothRectRight : (clothRectLeft + clothRectRight) / 2;
+    resizeAnchorScreenY = hasBottom ? clothRectTop : hasTop ? clothRectBottom : (clothRectTop + clothRectBottom) / 2;
+
+    resizeCursorClass = cursorClassForSides(sides);
+    document.body.classList.add(resizeCursorClass);
+    mouse.active = false; // same reasoning as beginClothDrag above
+  }
+
+  function updateClothResize(clientX, clientY) {
+    if (!resizing) return;
+    // Cloth-space size change, converted using the scale that was in
+    // effect when the drag started -- not the live one, since that's
+    // about to change *because* of this resize. Using anything but a
+    // fixed reference would make the cloth grow or shrink at a
+    // shifting rate as the drag went on.
+    const dxCloth = (clientX - resizeStartClientX) / resizeStartScale;
+    const dyCloth = (clientY - resizeStartClientY) / resizeStartScale;
+
+    let newWidth = resizeStartWidth;
+    let newHeight = resizeStartHeight;
+    if (resizeSides.includes('right')) newWidth = resizeStartWidth + dxCloth;
+    if (resizeSides.includes('left')) newWidth = resizeStartWidth - dxCloth;
+    if (resizeSides.includes('bottom')) newHeight = resizeStartHeight + dyCloth;
+    if (resizeSides.includes('top')) newHeight = resizeStartHeight - dyCloth;
+
+    resizePendingWidth = Math.max(64, Math.min(MAX_CANVAS_DIM, Math.round(newWidth)));
+    resizePendingHeight = Math.max(64, Math.min(MAX_CANVAS_DIM, Math.round(newHeight)));
+    resizeHasPending = true;
+  }
+
+  function applyPendingResize() {
+    if (!resizeHasPending) return;
+    resizeHasPending = false;
+    if (resizePendingWidth === WIDTH && resizePendingHeight === HEIGHT) return;
+
+    applyCanvasSize(resizePendingWidth, resizePendingHeight);
+    widthInput.value = WIDTH;
+    heightInput.value = HEIGHT;
+    setActivePreset(null);
+
+    // applyCanvasSize (via updateViewport) just re-centered the cloth
+    // for its new aspect ratio, same as it would after typing a size in
+    // by hand -- pull it back so the anchor point picked in
+    // beginClothResize lands exactly where it was, instead of wherever
+    // plain re-centering happened to put it.
+    const curAnchorX = resizeSides.includes('right') ? clothRectLeft
+      : resizeSides.includes('left') ? clothRectRight
+      : (clothRectLeft + clothRectRight) / 2;
+    const curAnchorY = resizeSides.includes('bottom') ? clothRectTop
+      : resizeSides.includes('top') ? clothRectBottom
+      : (clothRectTop + clothRectBottom) / 2;
+    dragOffsetX += resizeAnchorScreenX - curAnchorX;
+    dragOffsetY += resizeAnchorScreenY - curAnchorY;
+    applyCameraTransform(); // re-clamped to the safe box, same as any other camera move
+  }
+
+  function endClothResize() {
+    if (!resizing) return;
+    resizing = false;
+    if (resizeCursorClass) document.body.classList.remove(resizeCursorClass);
+    resizeCursorClass = '';
+    applyPendingResize(); // land on exactly where the cursor let go, not wherever the last throttled tick was
+  }
+
+  // Shift-armed state drives three things in style.css: corner handles
+  // turning clickable, edge handles swapping their cursor from "move"
+  // to a resize cursor, and (combined with actually hovering one of the
+  // handles) the toolbar hiding so it can't get in the way of a resize
+  // right where it overlaps the top edge.
+  let shiftHeld = false;
+  let hoveringResizeHandle = false;
+
+  function refreshShiftModeUI() {
+    clothFrame.classList.toggle('shift-armed', shiftHeld);
+    clothFrame.classList.toggle('shift-hint', shiftHeld && hoveringResizeHandle);
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Shift' && !shiftHeld) { shiftHeld = true; refreshShiftModeUI(); }
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.key === 'Shift') { shiftHeld = false; refreshShiftModeUI(); }
+  });
+  // Without this, alt-tabbing (or anything else that steals focus) away
+  // while Shift happens to be down would leave shiftHeld stuck true
+  // forever, since no keyup would ever fire back in this window.
+  window.addEventListener('blur', () => {
+    if (shiftHeld) { shiftHeld = false; refreshShiftModeUI(); }
+  });
+
+  dragHandles.forEach((handle) => {
+    handle.addEventListener('mouseenter', () => { hoveringResizeHandle = true; refreshShiftModeUI(); });
+    handle.addEventListener('mouseleave', () => { hoveringResizeHandle = false; refreshShiftModeUI(); });
+
+    handle.addEventListener('mousedown', (e) => {
+      const sides = handle.dataset.resize ? handle.dataset.resize.split(' ') : null;
+      if (e.shiftKey && sides) {
+        beginClothResize(sides, e.clientX, e.clientY);
+      } else if (handle.classList.contains('cloth-edge-handle')) {
+        // Corner handles have no move behavior of their own -- they only
+        // ever turn clickable in the first place while shift-armed (see
+        // style.css), so this branch is unreachable for them in practice.
+        beginClothDrag(e.clientX, e.clientY);
+      }
+      e.preventDefault();
+    });
+
+    // Touch has no Shift key to speak of, so touch stays move-only --
+    // same as it was before resize existed.
+    handle.addEventListener('touchstart', (e) => {
+      const t = e.touches[0];
+      if (!t || !handle.classList.contains('cloth-edge-handle')) return;
+      beginClothDrag(t.clientX, t.clientY);
+    }, { passive: true });
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    updateClothDrag(e.clientX, e.clientY);
+    updateClothResize(e.clientX, e.clientY);
+  });
+  window.addEventListener('touchmove', (e) => {
+    if (!clothDragging) return;
+    const t = e.touches[0];
+    if (!t) return;
+    updateClothDrag(t.clientX, t.clientY);
+    e.preventDefault(); // dragging the cloth shouldn't also scroll the page
+  }, { passive: false });
+
+  window.addEventListener('mouseup', () => { endClothDrag(); endClothResize(); });
+  window.addEventListener('touchend', endClothDrag);
+  window.addEventListener('touchcancel', endClothDrag);
+
   document.getElementById('densityBtn').addEventListener('click', () => {
     // Button label stays put ("Density") regardless of which setting is
     // active -- it's a cycle button living in a small toolbar now, not
@@ -2015,6 +2326,19 @@
       if (dragIgniteTimer <= 0) {
         ignite({ x: mouse.x, y: mouse.y }, { strength: 0.5 });
         dragIgniteTimer = DRAG_IGNITE_INTERVAL;
+      }
+    }
+
+    // Same throttle-by-time idea as the drag-ignite trail above, just
+    // applied to an in-progress resize: updateClothResize() (called
+    // from the mousemove listener) only ever records where the pointer
+    // wants the size to be, this is what actually rebuilds the cloth to
+    // match, a handful of times a second rather than every mousemove.
+    if (resizing) {
+      resizeApplyTimer -= dt;
+      if (resizeApplyTimer <= 0) {
+        applyPendingResize();
+        resizeApplyTimer = RESIZE_APPLY_INTERVAL;
       }
     }
 
