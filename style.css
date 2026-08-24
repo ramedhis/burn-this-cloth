@@ -433,3 +433,67 @@
     color: #000;
     border-color: #d1453d;
   }
+
+  /* Resize popup: a second, lighter floating window in the same visual
+     language as .panel above (same background/border/font-size), just
+     smaller and opened/closed from the cloth's own toolbar instead of
+     always being on screen. Positioned away from the side panel's own
+     top-left corner by default so the two don't start out stacked;
+     panel.js's drag handler (same mechanism as the side panel's) takes
+     over from there via inline left/top, same as .panel does. */
+  .resize-popup {
+    position: fixed;
+    top: 90px; left: 320px;
+    z-index: 25;
+    width: 250px;
+    max-width: 80vw;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    overflow: hidden;
+  }
+
+  .resize-popup.hidden { display: none; }
+
+  .popup-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 10px 12px 16px;
+    background: var(--wash);
+    border-bottom: 1px solid var(--line);
+    cursor: grab;
+    user-select: none;
+  }
+
+  .popup-head:active { cursor: grabbing; }
+
+  .popup-title {
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink);
+  }
+
+  .popup-close {
+    appearance: none;
+    background: var(--panel);
+    color: var(--ink-dim);
+    border: 1px solid var(--line);
+    width: 24px; height: 24px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    transition: border-color 0.1s ease, color 0.1s ease;
+  }
+
+  .popup-close:hover { border-color: var(--ink); color: var(--ink); }
+
+  .popup-body { padding: 16px; }
+  .popup-body .panel-label:first-child { margin-top: 0; }

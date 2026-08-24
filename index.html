@@ -26,12 +26,30 @@
         Hover anywhere on the image to push the cloth. Click a spot to set it on fire.
         Shift+click a point on the cloth to nail an anchor there, or shift+click
         an existing anchor to remove it. Hover the cloth's own frame for quick
-        tools -- load/remove image, density, mesh.
+        tools -- load/remove image, density, mesh, resize.
       </div>
       <div class="panel-row">
         <button id="resetBtn">Reset State</button>
       </div>
+    </div>
+  </div>
 
+  <!-- Canvas-size controls, previously living in the side panel above --
+       moved out into their own small draggable popup (opened from the
+       "Resize" button on the cloth's own toolbar, see clothToolbarLeft
+       below) so resizing is reachable right from the cloth itself
+       instead of a scroll/reach back to the side panel every time.
+       Same drag-by-header + close-button pattern as the main panel,
+       just a second lighter-weight instance of it (see panel.js).
+       Nothing about the controls themselves changed -- same IDs, same
+       classes -- so main.js's size-preset/apply wiring didn't need to
+       change at all, only where these elements physically live. -->
+  <div class="resize-popup hidden" id="resizePopup">
+    <div class="popup-head" id="resizePopupHead">
+      <div class="popup-title">Resize</div>
+      <button class="popup-close" id="resizePopupClose" title="close">&times;</button>
+    </div>
+    <div class="popup-body">
       <div class="panel-label">Canvas size</div>
       <div class="preset-group" id="presetRow">
         <button type="button" class="preset-btn" data-preset="square">1:1</button>
@@ -96,6 +114,7 @@
           <button type="button" id="removeImageBtn" class="cloth-tool-btn" title="Unload image">Unload</button>
           <button type="button" id="densityBtn" class="cloth-tool-btn">Density</button>
           <button type="button" id="gridToggleBtn" class="cloth-tool-btn">Mesh</button>
+          <button type="button" id="resizeToolBtn" class="cloth-tool-btn">Resize</button>
         </div>
         <div class="cloth-toolbar cloth-toolbar-right" id="clothToolbarRight">
           <button type="button" id="clothCloseBtn" class="cloth-tool-btn cloth-close-btn" title="Remove cloth">Remove</button>
