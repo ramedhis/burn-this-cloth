@@ -87,6 +87,31 @@
     return j === 0;
   }
 
+  // Which boundary line (if any) a particle sits on, and the full
+  // ordered list of grid indices running along one of those lines --
+  // the two halves of "hover an edge, click to anchor the whole
+  // thing" (see updateEdgeHover/pinEdge in interaction.js). A corner
+  // particle satisfies two of these at once; top/bottom win over
+  // left/right since that's the pair checked first below -- doesn't
+  // matter much in practice, it just has to pick one edge consistently
+  // for the highlight to lock onto.
+  function edgeOf(p) {
+    if (p.gj === 0) return 'top';
+    if (p.gj === ROWS) return 'bottom';
+    if (p.gi === 0) return 'left';
+    if (p.gi === COLS) return 'right';
+    return null;
+  }
+
+  function edgeParticleIndices(edge) {
+    const out = [];
+    if (edge === 'top') { for (let i = 0; i <= COLS; i++) out.push(idx(i, 0)); }
+    else if (edge === 'bottom') { for (let i = 0; i <= COLS; i++) out.push(idx(i, ROWS)); }
+    else if (edge === 'left') { for (let j = 0; j <= ROWS; j++) out.push(idx(0, j)); }
+    else if (edge === 'right') { for (let j = 0; j <= ROWS; j++) out.push(idx(COLS, j)); }
+    return out;
+  }
+
   function buildGrid() {
     COLS = densities[densityIdx].c;
     ROWS = densities[densityIdx].r;
@@ -101,6 +126,13 @@
         const pinned = isPinned(i, j);
         particles.push({
           x: rx, y: ry, oldX: rx, oldY: ry, restX: rx, restY: ry,
+          // Grid coordinates, kept on the particle itself so anything
+          // that only has a particle reference (nearest-hit tests,
+          // mostly) can still tell where it sits in the grid without
+          // the caller having to carry i/j around separately. Used by
+          // edgeOf() below to figure out which of the four boundary
+          // lines (if any) a given particle belongs to.
+          gi: i, gj: j,
           pinned,
           // Where a pinned particle actually holds itself, as opposed to
           // restX/restY (the flat, undeformed layout position, which stays
@@ -146,6 +178,7 @@
     // up rendering underneath the cloth surface after every rebuild.
     clothContainer.addChild(gridGraphics);
     clothContainer.addChild(anchorGraphics);
+    clothContainer.addChild(edgeHighlightGraphics);
   }
 
   function applyCanvasSize(w, h) {
@@ -221,6 +254,19 @@
   // jump (e.g. re-entering the canvas somewhere completely different)
   // from registering as one absurd gust.
   function updateMouseVelocity(dt) {
+    if (shiftHeld) {
+      // Shift-hover drives the anchor UI (single-point and edge-line
+      // toggling, see interaction.js) -- it's not supposed to also push
+      // or fan the cloth around while you're aiming it. Bailing out
+      // here entirely, rather than just skipping the force-application
+      // step below, is what keeps windPower pinned at zero for the
+      // whole time Shift is held instead of quietly charging up out of
+      // sight and then dumping a stored gust the instant it's released.
+      mouse.vx = 0; mouse.vy = 0; mouse.speed = 0;
+      windPower = 0;
+      mouse.px = mouse.x; mouse.py = mouse.y;
+      return;
+    }
     if (mouse.active && mouse.px > -9000 && dt > 0) {
       const rawVx = (mouse.x - mouse.px) / dt;
       const rawVy = (mouse.y - mouse.py) / dt;
@@ -272,7 +318,7 @@
         ax += Math.sin(p.seed + p.heat * 9) * 60 * burnAmt;
       }
 
-      if (mouse.active) {
+      if (mouse.active && !shiftHeld) {
         const dx = p.x - mouse.x, dy = p.y - mouse.y;
         const dist = Math.sqrt(dx * dx + dy * dy) + 0.001;
         if (dist < PUSH_RADIUS) {

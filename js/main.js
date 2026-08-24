@@ -98,6 +98,8 @@
     drawGrid();
     updateAnchorHover();
     drawAnchors();
+    updateEdgeHover(dt);
+    drawEdgeHighlight();
     updateFireSprites();
     updateBloom();
     if (isClothGone()) clothFrame.classList.remove('active');

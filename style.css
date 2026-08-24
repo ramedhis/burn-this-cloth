@@ -357,11 +357,14 @@
     z-index: 2; /* above .cloth-edge-handle, so the top strip never steals a click meant for these buttons */
   }
 
-  /* Shift + actually hovering one of the resize handles (tracked in JS,
-     since plain CSS has no way to react to a sibling's hover state) --
-     hides the toolbar so it can't visually fight with, or accidentally
-     eat a click meant for, the top edge/corner handles it overlaps. */
-  .cloth-frame.shift-hint .cloth-toolbar {
+  /* Just plain Shift being held hides the whole toolbar, not only while
+     hovering a resize handle -- shift-hovering the cloth is for the
+     anchor UI (single/edge-line toggling, see interaction.js) now, so
+     the load/density/mesh/remove buttons sitting on top of that same
+     frame would otherwise be visible clutter (and, worse, a stray
+     click target) the entire time someone's aiming an anchor. Comes
+     back the instant Shift is released. */
+  .cloth-frame.shift-armed .cloth-toolbar {
     opacity: 0 !important;
     pointer-events: none !important;
   }

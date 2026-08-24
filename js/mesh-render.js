@@ -183,6 +183,47 @@
     anchorGraphics.endFill();
   }
 
+  // Edge-anchor highlight: holding Shift over an un-anchored point on
+  // one of the cloth's four boundary lines and dwelling there for a
+  // moment lights up the whole line, previewing what a click will
+  // pin -- see updateEdgeHover/pinEdge in interaction.js for the
+  // hover-timing and the actual pinning. Drawn as two passes over the
+  // same path (a wide soft one, a thin crisp one) for the same glow-
+  // around-a-solid-core look drawAnchors uses for a single point,
+  // just stretched into a line instead of a dot.
+  const edgeHighlightGraphics = new PIXI.Graphics();
+  clothContainer.addChild(edgeHighlightGraphics);
+
+  function drawEdgeHighlight() {
+    edgeHighlightGraphics.clear();
+    if (!edgeHighlightActive || !hoveredEdge) return;
+
+    const idxs = edgeParticleIndices(hoveredEdge);
+    if (idxs.length < 2) return;
+
+    const glowWidth = 10 * fireScale();
+    const lineWidth = 2.5 * fireScale();
+
+    // Two passes, not one path reused -- each needs its own moveTo/lineTo
+    // walk since Pixi's Graphics bakes lineStyle per-segment as you draw,
+    // not retroactively over a path you've already laid down.
+    for (const [width, alpha] of [[glowWidth, 0.18], [lineWidth, 0.9]]) {
+      edgeHighlightGraphics.lineStyle(width, 0xffffff, alpha);
+      let started = false;
+      for (const i of idxs) {
+        const p = particles[i];
+        // A destroyed vertex breaks the line into separate runs rather
+        // than letting it draw a stray segment through wherever that
+        // point last was -- matters once an edge has already partly
+        // burned through by the time someone goes to anchor the rest
+        // of it.
+        if (p.destroyed) { started = false; continue; }
+        if (!started) { edgeHighlightGraphics.moveTo(p.x, p.y); started = true; }
+        else edgeHighlightGraphics.lineTo(p.x, p.y);
+      }
+    }
+  }
+
   const vertexSrc = `
     attribute vec2 aVertexPosition;
     attribute vec2 aTextureCoord;

@@ -202,6 +202,82 @@
     hoveredAnchor = (best && best.pinned && distSq <= anchorSnapRadiusSq()) ? best : null;
   }
 
+  // Edge-line anchoring: Shift + hover a point sitting on one of the
+  // cloth's four boundary lines, hold still there for a moment, and
+  // the whole line lights up (drawEdgeHighlight in mesh-render.js),
+  // previewing what a click is about to do to every point along it.
+  // Works the same way in both directions -- hovering an un-anchored
+  // stretch previews pinning it, hovering an already-anchored stretch
+  // previews un-pinning it -- edgeHoverMode below is just which of
+  // those two the currently-hovered point calls for, so the click
+  // handler knows which one to actually do.
+  const EDGE_HOVER_DWELL = 1; // seconds of continuous hover before it lights up
+  let hoveredEdge = null;
+  let edgeHoverMode = null; // 'pin' | 'unpin'
+  let edgeHoverTimer = 0;
+  let edgeHighlightActive = false;
+
+  function resetEdgeHover() {
+    hoveredEdge = null;
+    edgeHoverMode = null;
+    edgeHoverTimer = 0;
+    edgeHighlightActive = false;
+  }
+
+  function updateEdgeHover(dt) {
+    if (!shiftHeld || !mouse.active || particles.length === 0) { resetEdgeHover(); return; }
+
+    const { particle: best, distSq } = nearestParticleAt({ x: mouse.x, y: mouse.y });
+    if (!best || best.destroyed || distSq > anchorSnapRadiusSq()) { resetEdgeHover(); return; }
+
+    const edge = edgeOf(best);
+    if (!edge) { resetEdgeHover(); return; } // an interior point, not on any boundary line
+
+    const mode = best.pinned ? 'unpin' : 'pin';
+    if (edge !== hoveredEdge || mode !== edgeHoverMode) {
+      // Landed on a different edge, or the same edge but the point
+      // under the cursor flipped from anchored to un-anchored (or vice
+      // versa) -- either way that's a different action than whatever
+      // was being dwelled on before, so the wait starts over rather
+      // than carrying leftover time across into it.
+      hoveredEdge = edge;
+      edgeHoverMode = mode;
+      edgeHoverTimer = 0;
+      edgeHighlightActive = false;
+    }
+    edgeHoverTimer += dt;
+    if (edgeHoverTimer >= EDGE_HOVER_DWELL) edgeHighlightActive = true;
+  }
+
+  // Pins every still-intact, not-yet-anchored particle along one
+  // boundary line, each nailed at wherever it's actually hanging right
+  // now -- same "anchor in place" semantics toggleAnchorAt already
+  // uses for a single point, just applied to the whole line at once.
+  // Already-pinned points on that same line are left alone rather than
+  // re-pinned, so this is safe to fire on a partially-anchored edge
+  // without disturbing anchors someone placed earlier by hand.
+  function pinEdge(edge) {
+    for (const i of edgeParticleIndices(edge)) {
+      const p = particles[i];
+      if (p.destroyed || p.pinned) continue;
+      p.pinned = true;
+      p.pinX = p.x;
+      p.pinY = p.y;
+    }
+  }
+
+  // The reverse: un-pins every currently-anchored particle along one
+  // boundary line, leaving anything already loose on that line alone.
+  // Whatever falls now falls from wherever it was actually held, same
+  // as removing any other anchor.
+  function unpinEdge(edge) {
+    for (const i of edgeParticleIndices(edge)) {
+      const p = particles[i];
+      if (p.destroyed || !p.pinned) continue;
+      p.pinned = false;
+    }
+  }
+
   // pointerDown + dragIgniteTimer drive the "drag a lit match across
   // the cloth" behavior in the main loop below: the initial press
   // still lands one full-strength ignite() immediately (so a plain
@@ -216,10 +292,22 @@
   canvas.addEventListener('mousedown', (e) => {
     const pos = getPos(e);
 
-    // Shift turns a click into an anchor toggle instead of an ignite --
+    // Shift turns a click into an anchor action instead of an ignite --
     // same modifier key the cloth-frame resize handles use, but this is
     // on the canvas itself so the two never fire on the same click.
+    // A dwelled edge highlight takes priority over the plain single-
+    // point toggle below: once the line has actually lit up, that's
+    // what the click is understood to be aimed at, not just whichever
+    // one grid point happens to be nearest the cursor. Which of the
+    // two things it does (pin the line or clear it) is whatever
+    // edgeHoverMode settled on while dwelling -- see updateEdgeHover.
     if (e.shiftKey) {
+      if (edgeHighlightActive && hoveredEdge) {
+        if (edgeHoverMode === 'unpin') unpinEdge(hoveredEdge);
+        else pinEdge(hoveredEdge);
+        resetEdgeHover(); // the line's state just flipped, so there's nothing left for this hover to be "about"
+        return;
+      }
       toggleAnchorAt(pos);
       return;
     }
@@ -469,17 +557,18 @@
     applyPendingResize(); // land on exactly where the cursor let go, not wherever the last throttled tick was
   }
 
-  // Shift-armed state drives three things in style.css: corner handles
-  // turning clickable, edge handles swapping their cursor from "move"
-  // to a resize cursor, and (combined with actually hovering one of the
-  // handles) the toolbar hiding so it can't get in the way of a resize
-  // right where it overlaps the top edge.
+  // Shift-armed state drives two things in style.css now: corner
+  // handles turning clickable, and edge handles swapping their cursor
+  // from "move" to a resize cursor. It used to also gate the toolbar's
+  // hidden state, but only in combination with hovering a resize
+  // handle specifically -- that got widened to "hide any time Shift is
+  // held at all" (see .cloth-frame.shift-armed .cloth-toolbar in
+  // style.css), which plain shift-armed already covers on its own, so
+  // there's no separate hover-tracked class needed for it anymore.
   let shiftHeld = false;
-  let hoveringResizeHandle = false;
 
   function refreshShiftModeUI() {
     clothFrame.classList.toggle('shift-armed', shiftHeld);
-    clothFrame.classList.toggle('shift-hint', shiftHeld && hoveringResizeHandle);
   }
 
   window.addEventListener('keydown', (e) => {
@@ -496,9 +585,6 @@
   });
 
   dragHandles.forEach((handle) => {
-    handle.addEventListener('mouseenter', () => { hoveringResizeHandle = true; refreshShiftModeUI(); });
-    handle.addEventListener('mouseleave', () => { hoveringResizeHandle = false; refreshShiftModeUI(); });
-
     handle.addEventListener('mousedown', (e) => {
       const sides = handle.dataset.resize ? handle.dataset.resize.split(' ') : null;
       if (e.shiftKey && sides) {
