@@ -109,6 +109,14 @@
   let clothScale = 1;
   let originX = 0, originY = 0;
 
+  // Screen-space box the cloth actually occupies right now (derived
+  // from originX/originY/clothScale + WIDTH/HEIGHT above). Kept as its
+  // own set of variables, refreshed by updateViewport(), so the hover
+  // frame/toolbar overlay and its hit-test have a cheap answer to
+  // "where's the cloth on screen right now" without recomputing the
+  // camera math themselves.
+  let clothRectLeft = 0, clothRectTop = 0, clothRectRight = 0, clothRectBottom = 0;
+
   // Fire visuals (flame/ember/smoke size, ignite radius) are all
   // tuned in absolute px against a 600x600 cloth. Everything
   // fire-related gets multiplied by this before use. Stays keyed off
@@ -137,6 +145,12 @@
     originX = (VIEW_W - dispW) / 2;
     originY = (VIEW_H - dispH) / 2;
 
+    clothRectLeft = originX;
+    clothRectTop = originY;
+    clothRectRight = originX + dispW;
+    clothRectBottom = originY + dispH;
+    positionClothFrame();
+
     worldRoot.scale.set(clothScale, clothScale);
     worldRoot.position.set(originX, originY);
 
@@ -151,6 +165,25 @@
     resetScorchLayer();
   }
   window.addEventListener('resize', updateViewport);
+
+  // Hover overlay: a thin rectangle that traces the cloth (with a
+  // small gap so the line never reads as part of the cloth/image
+  // itself), plus a small toolbar that sits on top of the rectangle's
+  // top edge. The toolbar carries the tools that only make sense
+  // "about this cloth" -- load/remove image, density, mesh -- so they
+  // live right where you're already looking instead of a side panel.
+  // Both are just CSS, driven by the numbers below; see positionClothFrame()
+  // and the hover hit-test near the other pointer listeners further down.
+  const clothFrame = document.getElementById('clothFrame');
+  const FRAME_GAP = 16; // px between the cloth's real edge and the rectangle
+
+  function positionClothFrame() {
+    if (!clothFrame) return;
+    clothFrame.style.left = (clothRectLeft - FRAME_GAP) + 'px';
+    clothFrame.style.top = (clothRectTop - FRAME_GAP) + 'px';
+    clothFrame.style.width = (clothRectRight - clothRectLeft + FRAME_GAP * 2) + 'px';
+    clothFrame.style.height = (clothRectBottom - clothRectTop + FRAME_GAP * 2) + 'px';
+  }
 
   // PixiJS application, rendering into the existing <canvas id="c">.
   // resolution stays at 1 and autoDensity is left off on purpose --
@@ -412,6 +445,27 @@
   function idx(i, j) { return j * (COLS + 1) + i; }
 
   let particles = [];
+
+  // True once there's nothing left of the cloth to see -- either every
+  // particle has actually burned through, or whatever's left has torn
+  // free and fallen off the bottom of the window. A scrap that ripped
+  // loose and dropped out of view is just as gone as one that burned
+  // up; the physics sim has no idea the window has an edge (particles
+  // keep falling in cloth-space forever), so "off past VIEW_H" is what
+  // "gone" looks like for a piece that never actually finished
+  // burning. At that point there's no cloth left to trace a rectangle
+  // around, so the hover frame shouldn't be able to show up either,
+  // until a reload/reset brings particles back.
+  function isClothGone() {
+    if (particles.length === 0) return false;
+    for (let n = 0; n < particles.length; n++) {
+      const p = particles[n];
+      if (p.destroyed) continue;
+      const screenY = originY + p.y * clothScale;
+      if (screenY <= VIEW_H) return false; // still on-screen and not burned through -- cloth isn't gone yet
+    }
+    return true;
+  }
 
   // Structural + shear constraints between neighbouring particles.
   // This is the entire support structure. A point stays up only
@@ -708,8 +762,17 @@
       // eligible either.
       const fallLimit = (VIEW_H - originY) / clothScale + 40;
       if (p.burn >= CUT_THRESHOLD && p.y > fallLimit) {
+        // No ash puff here on purpose -- by this point the fragment has
+        // already fallen well clear of the visible window (fallLimit is
+        // 40 cloth-units past VIEW_H), so it's not actually visible
+        // anymore. A puff used to fire anyway at a fixed spot near the
+        // cloth's own bottom edge (HEIGHT + 20) to "represent" it, but
+        // that put a small puff of smoke right where the hover frame's
+        // border sits, over and over, every time a scrap crossed this
+        // line -- reading as smoke stuck to the frame rather than
+        // anything to do with the actual cloth. Nothing is visibly
+        // lost by just letting it go quietly.
         p.destroyed = true;
-        spawnAshPuff(p.x, HEIGHT + 20);
       }
     }
   }
@@ -1310,6 +1373,17 @@
   function updateFire(dt) {
     for (const p of particles) {
       if (p.destroyed) continue;
+      // A scrap that's torn loose and fallen past the bottom of the
+      // window is, as far as the eye's concerned, already gone (this
+      // is the same cutoff isClothGone() uses) -- but the physics sim
+      // has no idea the window has an edge and keeps right on
+      // "burning" it in cloth-space forever. Without this check that
+      // still-burning-but-invisible particle kept spawning smoke,
+      // which then drifted back up into view right around the bottom
+      // edge -- a stray wisp with no visible source, right where the
+      // hover frame's own bottom edge sits.
+      const screenY = originY + p.y * clothScale;
+      if (screenY > VIEW_H) continue;
       if (p.burning) {
         if (Math.random() < 0.85) spawnFlame(p.x, p.y);
         if (Math.random() < 0.35) spawnEmber(p.x, p.y);
@@ -1678,6 +1752,45 @@
     e.preventDefault();
   }, { passive: false });
 
+  // Hover hit-test for the frame/toolbar overlay. Deliberately its own
+  // window-level listener rather than piggybacking on the canvas one
+  // above: once the toolbar is visible and the cursor moves onto one
+  // of its buttons, the canvas stops being the topmost element there
+  // and would otherwise fire mouseleave right as someone reaches for a
+  // button. A window listener keeps tracking clientX/Y regardless of
+  // which element is actually under the cursor.
+  //
+  // Two different boxes, on purpose: the frame should only ever switch
+  // ON because the cursor is over the actual cloth -- hovering the
+  // gap by itself shouldn't summon it. But once it's up, the cursor
+  // has to cross that same gap to reach the toolbar sitting above it,
+  // so switching OFF the instant the cursor leaves the strict cloth
+  // box would make the buttons unreachable. So: entering the strict
+  // box turns it on; leaving the padded box turns it off; anywhere in
+  // between (the gap, or the toolbar itself) just leaves it however it
+  // already was.
+  const FRAME_HOVER_PAD = 16;      // matches FRAME_GAP, left/right/bottom slack
+  const FRAME_HOVER_TOP_PAD = 56;  // extra headroom so the toolbar itself counts
+  window.addEventListener('mousemove', (e) => {
+    if (isClothGone()) { clothFrame.classList.remove('active'); return; }
+
+    const inClothStrict =
+      e.clientX >= clothRectLeft && e.clientX <= clothRectRight &&
+      e.clientY >= clothRectTop && e.clientY <= clothRectBottom;
+    const inPaddedZone =
+      e.clientX >= clothRectLeft - FRAME_HOVER_PAD &&
+      e.clientX <= clothRectRight + FRAME_HOVER_PAD &&
+      e.clientY >= clothRectTop - FRAME_HOVER_TOP_PAD &&
+      e.clientY <= clothRectBottom + FRAME_HOVER_PAD;
+
+    if (inClothStrict) {
+      clothFrame.classList.add('active');
+    } else if (!inPaddedZone) {
+      clothFrame.classList.remove('active');
+    }
+    // else: cursor is in the gap or on the toolbar -- leave state as is
+  });
+
   function ignite(pos, opts) {
     // strength scales down both the catch radius and how much burn a
     // touch actually deposits -- used to make a held drag lay down a
@@ -1770,6 +1883,18 @@
   canvas.addEventListener('touchend', () => { pointerDown = false; });
   canvas.addEventListener('touchcancel', () => { pointerDown = false; });
 
+  // Load and Remove occupy the same slot in the toolbar rather than
+  // both sitting there permanently -- Remove is meaningless with no
+  // image loaded, and Load is redundant once one's already in. This
+  // just flips which one has the .hidden class based on sourceImage.
+  const loadImageBtn = document.getElementById('loadImageBtn');
+  const removeImageBtnEl = document.getElementById('removeImageBtn');
+  function updateImageToolButtons() {
+    const hasImage = !!sourceImage;
+    loadImageBtn.classList.toggle('hidden', hasImage);
+    removeImageBtnEl.classList.toggle('hidden', !hasImage);
+  }
+
   document.getElementById('fileInput').addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -1779,6 +1904,7 @@
       sourceImage = img;
       resetCloth(false);
       URL.revokeObjectURL(url);
+      updateImageToolButtons();
     };
     img.src = url;
   });
@@ -1788,15 +1914,37 @@
     sourceImage = null;
     drawPlaceholderTexture();
     refreshImageOnly();
+    updateImageToolButtons();
   });
 
   document.getElementById('resetBtn').addEventListener('click', () => {
     resetCloth(false);
   });
 
-  document.getElementById('densityBtn').addEventListener('click', (e) => {
+  // Close lives on the cloth's own toolbar and does exactly what it
+  // says: deletes the cloth entity outright, on demand, rather than
+  // waiting for it to burn all the way through. Marking every particle
+  // destroyed is enough on its own for rendering (destroyed particles
+  // already skip drawing everywhere), but the flame/ember/smoke/ash
+  // arrays are independent objects once spawned -- they don't hold a
+  // reference back to the particle that lit them -- so without
+  // clearing them too you'd get fire hanging in mid-air over a cloth
+  // that no longer exists.
+  document.getElementById('clothCloseBtn').addEventListener('click', () => {
+    for (let n = 0; n < particles.length; n++) particles[n].destroyed = true;
+    flames.length = 0;
+    embers.length = 0;
+    smoke.length = 0;
+    ashFlakes.length = 0;
+    clothFrame.classList.remove('active');
+  });
+
+  document.getElementById('densityBtn').addEventListener('click', () => {
+    // Button label stays put ("Density") regardless of which setting is
+    // active -- it's a cycle button living in a small toolbar now, not
+    // a status readout, so there's no room (or need) to spell out the
+    // current value on the button itself.
     densityIdx = (densityIdx + 1) % densities.length;
-    e.target.textContent = 'Density: ' + densities[densityIdx].label;
     resetCloth(true);
   });
 
@@ -1811,8 +1959,10 @@
 
   const gridToggleBtn = document.getElementById('gridToggleBtn');
   gridToggleBtn.addEventListener('click', () => {
+    // Same deal as densityBtn above -- label just says "Mesh" always,
+    // the is-on class (already styled in CSS) is what shows whether
+    // it's currently active.
     showGrid = !showGrid;
-    gridToggleBtn.textContent = 'Mesh: ' + (showGrid ? 'shown' : 'hidden');
     gridToggleBtn.classList.toggle('is-on', showGrid);
   });
 
@@ -1849,6 +1999,7 @@
   updateViewport();
   drawPlaceholderTexture();
   resetCloth(true);
+  updateImageToolButtons();
 
   let last = performance.now();
   function loop(now) {
@@ -1873,6 +2024,7 @@
     drawGrid();
     updateFireSprites();
     updateBloom();
+    if (isClothGone()) clothFrame.classList.remove('active');
     try {
       app.renderer.render(app.stage);
     } catch (err) {

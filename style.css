@@ -250,3 +250,83 @@
 
   .anchor-btn:last-child { border-right: none; }
   .anchor-btn.active { background: var(--ink); color: #000; }
+
+  /* Cloth hover frame: a thin rectangle traced around the cloth,
+     positioned/sized in JS (see positionClothFrame in script.js) since
+     it has to track the cloth's actual on-screen box, which moves and
+     resizes with the window and with canvas-size changes. Invisible
+     and non-interactive at rest so it never gets in the way of
+     pushing/igniting the cloth underneath it. */
+  .cloth-frame {
+    position: absolute;
+    z-index: 2;
+    border: 1px solid var(--line);
+    box-sizing: border-box;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+
+  .cloth-frame.active { opacity: 1; }
+
+  /* Sits on the frame's own top edge, straddling it (translateY -50%)
+     the way a tab sits on a folder edge, so it reads as attached to
+     the rectangle rather than floating above it. Only clickable once
+     the frame is active -- pointer-events stays off otherwise so an
+     invisible toolbar can't quietly eat a click meant for the cloth. */
+  .cloth-toolbar {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    gap: 6px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+  }
+
+  .cloth-frame.active .cloth-toolbar {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .cloth-tool-btn {
+    appearance: none;
+    background: var(--panel);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    padding: 7px 10px;
+    font-family: inherit;
+    font-size: 10.5px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    cursor: pointer;
+    flex: 0 0 auto;
+    transition: border-color 0.1s ease, color 0.1s ease, background-color 0.1s ease;
+  }
+
+  .cloth-tool-btn:hover {
+    border-color: var(--ink);
+    background: var(--wash);
+  }
+
+  /* Load and Remove swap places rather than sitting side by side --
+     see updateImageToolButtons() in script.js -- so there's only ever
+     one obviously-correct action showing for the current state. */
+  .cloth-tool-btn.hidden { display: none; }
+
+  /* Same red accent as #resetBtn in the side panel -- both buttons are
+     the "exit" action for their respective UI (resetBtn wipes state,
+     this one dismisses the panel), so they share the color language. */
+  .cloth-close-btn {
+    border-color: #d1453d;
+    color: #d1453d;
+  }
+
+  .cloth-close-btn:hover {
+    background: #d1453d;
+    color: #000;
+    border-color: #d1453d;
+  }

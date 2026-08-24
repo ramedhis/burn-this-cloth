@@ -24,19 +24,7 @@
     <div class="panel-body">
       <div class="panel-hint">
         Hover anywhere on the image to push the cloth. Click a spot to set it on fire.
-      </div>
-      <div class="panel-row">
-        <label class="file-btn">
-          Load image
-          <input type="file" id="fileInput" accept="image/*" />
-        </label>
-        <button id="removeImageBtn">Remove image</button>
-      </div>
-      <div class="panel-row">
-        <button id="densityBtn">Density: fine</button>
-      </div>
-      <div class="panel-row">
-        <button id="gridToggleBtn">Mesh: hidden</button>
+        Hover the cloth's own frame for quick tools -- load/remove image, density, mesh.
       </div>
       <div class="panel-row">
         <button id="resetBtn">Reset State</button>
@@ -71,6 +59,24 @@
   <div class="stage-wrap">
     <div class="stage">
       <canvas id="c"></canvas>
+
+      <!-- Thin rectangle traced around the cloth on hover, gapped off
+           the cloth's real edges so it never reads as part of the
+           image itself. The toolbar is nested inside it so it can
+           anchor itself to the rectangle's own top edge in CSS
+           (see .cloth-toolbar) rather than needing its own JS math. -->
+      <div class="cloth-frame" id="clothFrame">
+        <div class="cloth-toolbar" id="clothToolbar">
+          <label class="cloth-tool-btn file-btn" id="loadImageBtn" title="Load image">
+            Load
+            <input type="file" id="fileInput" accept="image/*" />
+          </label>
+          <button type="button" id="removeImageBtn" class="cloth-tool-btn" title="Remove image">Remove</button>
+          <button type="button" id="densityBtn" class="cloth-tool-btn">Density</button>
+          <button type="button" id="gridToggleBtn" class="cloth-tool-btn">Mesh</button>
+          <button type="button" id="clothCloseBtn" class="cloth-tool-btn cloth-close-btn" title="Close panel">Close</button>
+        </div>
+      </div>
     </div>
   </div>
 
