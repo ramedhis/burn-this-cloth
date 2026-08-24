@@ -283,23 +283,17 @@
   bgCanvas.height = VIEW_H;
   const bgCtx = bgCanvas.getContext('2d');
 
-  let bgImage = null;
   let bgTexture = null;
   let bgSprite = null;
 
   function drawBackgroundCanvas() {
+    // Used to optionally draw a user-loaded background image here too
+    // (cover-fit, same as the cloth image); that feature's gone now --
+    // plain black is the only look this layer ever needs to produce,
+    // it's just here so scorch/bloom have something underneath them
+    // to composite onto.
     bgCtx.fillStyle = '#000000';
     bgCtx.fillRect(0, 0, VIEW_W, VIEW_H);
-    if (bgImage) {
-      // Same "cover" fit as the cloth image: fill the frame, crop
-      // whatever overhangs, no letterboxing.
-      const iw = bgImage.naturalWidth || bgImage.width;
-      const ih = bgImage.naturalHeight || bgImage.height;
-      const scale = Math.max(VIEW_W / iw, VIEW_H / ih);
-      const dw = iw * scale, dh = ih * scale;
-      const dx = (VIEW_W - dw) / 2, dy = (VIEW_H - dh) / 2;
-      bgCtx.drawImage(bgImage, dx, dy, dw, dh);
-    }
   }
 
   function refreshBackgroundTexture() {
@@ -1794,25 +1788,6 @@
     sourceImage = null;
     drawPlaceholderTexture();
     refreshImageOnly();
-  });
-
-  document.getElementById('bgFileInput').addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      bgImage = img;
-      refreshBackgroundTexture();
-      URL.revokeObjectURL(url);
-    };
-    img.src = url;
-  });
-
-  document.getElementById('removeBgBtn').addEventListener('click', () => {
-    // Back to the default plain black background
-    bgImage = null;
-    refreshBackgroundTexture();
   });
 
   document.getElementById('resetBtn').addEventListener('click', () => {
