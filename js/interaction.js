@@ -362,6 +362,9 @@
   document.getElementById('fileInput').addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
+
+    e.target.value = '';
+
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
@@ -369,6 +372,12 @@
       resetCloth(false);
       URL.revokeObjectURL(url);
       updateImageToolButtons();
+      // Loading a new picture is the opposite of "start completely
+      // over" -- they're actively continuing with fresh content, so a
+      // later Reset State shouldn't also yank the size out from under
+      // them just because Remove happened to be clicked at some earlier
+      // point in the session.
+      pendingFactoryReset = false;
     };
     img.src = url;
   });
@@ -381,8 +390,40 @@
     updateImageToolButtons();
   });
 
+  // Captured once, right here as this file first runs -- by this point
+  // viewport.js/cloth-physics.js have already set WIDTH/HEIGHT to
+  // whatever the real page-load size is, so this is genuinely "factory
+  // default," not just whatever the cloth's size happens to be right
+  // now. Used below by the Remove-then-Reset combo, since that's the
+  // one path that needs to get back to it.
+  const DEFAULT_WIDTH = WIDTH;
+  const DEFAULT_HEIGHT = HEIGHT;
+
+  // Armed the instant Remove is clicked, consumed by the very next
+  // Reset State click and nothing else. That specific combination --
+  // not either button alone -- is what reads as "start completely
+  // over": Remove by itself just clears the picture (Reset afterward
+  // still finds sourceImage cleared and falls back to the placeholder,
+  // but at whatever size the cloth already was), while this flag is
+  // what additionally pulls the *size* back to default too.
+  let pendingFactoryReset = false;
+
   document.getElementById('resetBtn').addEventListener('click', () => {
-    resetCloth(false);
+    if (pendingFactoryReset) {
+      pendingFactoryReset = false;
+      applyCanvasSize(DEFAULT_WIDTH, DEFAULT_HEIGHT); // also reloads the placeholder, same as resetCloth(false) alone would -- sourceImage is already null from Remove
+      widthInput.value = DEFAULT_WIDTH;
+      heightInput.value = DEFAULT_HEIGHT;
+      setActivePreset(null);
+      // Land dead center too, same as a fresh page load -- a "factory
+      // reset" that left the cloth wherever it last got dragged to
+      // wouldn't really be the whole setup going back to default.
+      dragOffsetX = 0;
+      dragOffsetY = 0;
+      applyCameraTransform();
+    } else {
+      resetCloth(false);
+    }
   });
 
   // Close lives on the cloth's own toolbar and does exactly what it
@@ -394,6 +435,17 @@
   // reference back to the particle that lit them -- so without
   // clearing them too you'd get fire hanging in mid-air over a cloth
   // that no longer exists.
+  //
+  // Also clears sourceImage, same as hitting Unload -- this is what
+  // makes Reset State's behavior depend on *why* there's nothing on
+  // screen. Burning/tearing all the way through never touches
+  // sourceImage, so Reset afterward still finds it set and reloads the
+  // same picture: same cloth, back intact. Clicking Remove is a
+  // deliberate "start over" instead, so it wipes sourceImage too --
+  // Reset afterward finds nothing set and falls back to the plain
+  // placeholder, same as a fresh page load. Arming pendingFactoryReset
+  // here is that same idea taken one step further: Remove-then-Reset
+  // also pulls the *size* back to default, not just the picture.
   document.getElementById('clothCloseBtn').addEventListener('click', () => {
     for (let n = 0; n < particles.length; n++) particles[n].destroyed = true;
     flames.length = 0;
@@ -401,6 +453,9 @@
     smoke.length = 0;
     ashFlakes.length = 0;
     clothFrame.classList.remove('active');
+    sourceImage = null;
+    updateImageToolButtons();
+    pendingFactoryReset = true;
   });
 
   // Dragging the cloth around by its frame -- or, holding Shift,
