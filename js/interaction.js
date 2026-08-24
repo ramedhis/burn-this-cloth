@@ -109,8 +109,9 @@
     }
 
     // Click landed somewhere with nothing in range (e.g. right at an
-    // edge) -- fall back to just the closest particle so it never
-    // just silently does nothing
+    // edge) -- fall back to just the closest particle so a click that
+    // grazed the cloth but landed between grid points doesn't just
+    // silently do nothing.
     if (!hitAny) {
       let best = null, bestD = Infinity;
       for (const p of particles) {
@@ -119,8 +120,28 @@
         const d = dx * dx + dy * dy;
         if (d < bestD) { bestD = d; best = p; }
       }
-      if (best) { best.burning = true; if (best.burn < 0.05) best.burn = 0.05; }
+      // "Grazed the cloth" only counts if the nearest particle is
+      // still roughly within the same reach as the ignite radius
+      // itself -- generous enough to cover a coarse grid's spacing
+      // gaps, not a license to torch the fabric from clear across the
+      // page. Without this cap, a click anywhere at all -- even one
+      // that landed nowhere near the cloth -- would still set fire to
+      // whatever particle happened to be nearest, no matter how far
+      // away that actually was. Same as expecting a match lit a
+      // kilometer from a piece of paper to somehow set it alight.
+      const fallbackMaxDistSq = (radius * 1.5) ** 2;
+      if (best && bestD <= fallbackMaxDistSq) {
+        hitAny = true;
+        best.burning = true;
+        if (best.burn < 0.05) best.burn = 0.05;
+      }
     }
+
+    // Missed the cloth entirely -- no particle actually caught, but the
+    // click itself still throws its usual flame burst below regardless
+    // (a flick of fire lands wherever you click; whether the fabric
+    // itself was close enough to catch is a separate question, handled
+    // entirely by the distance cap above).
 
     // The sprite burst land -- separate roll from the cloth-patch
     // radius above, so a click can catch a wide patch of cloth but
