@@ -109,6 +109,25 @@
     </div>
   </div>
 
-  <script src="script.js"></script>
+  <!--
+    Loaded in this exact order on purpose: these used to be one big file
+    (script.js), split into files grouped by concern. They're plain
+    classic scripts, not modules -- each one's top-level let/const/function
+    declarations join the same shared global scope, so viewport.js's WIDTH
+    is visible to cloth-physics.js, cloth-physics.js's particles array is
+    visible to fire.js, and so on, in exactly the same way they could
+    already see each other back when it was all one file. That sharing is
+    exactly why the load order below has to match: a file can only use
+    what an earlier file already declared.
+  -->
+  <script src="js/panel.js"></script>
+  <script src="js/viewport.js"></script>
+  <script src="js/pixi-stage.js"></script>
+  <script src="js/texture.js"></script>
+  <script src="js/cloth-physics.js"></script>
+  <script src="js/mesh-render.js"></script>
+  <script src="js/fire.js"></script>
+  <script src="js/interaction.js"></script>
+  <script src="js/main.js"></script>
 </body>
 </html>
