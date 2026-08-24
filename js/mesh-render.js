@@ -154,6 +154,35 @@
     }
   }
 
+  // Anchor highlight overlay: shift-clicking the cloth (see
+  // toggleAnchorAt in interaction.js) nails or un-nails individual grid
+  // points. Anchors stay invisible at rest -- nothing is drawn here
+  // until Shift is held AND the cursor is actually sitting on top of an
+  // existing anchor (hoveredAnchor, tracked by updateAnchorHover in
+  // interaction.js), at which point just that one point reveals itself:
+  // a soft white glow around a solid grey dot. Move off it, or let go of
+  // Shift, and it disappears again.
+  const anchorGraphics = new PIXI.Graphics();
+  clothContainer.addChild(anchorGraphics);
+  const ANCHOR_DOT_COLOR = 0x999999;
+  const ANCHOR_GLOW_COLOR = 0xffffff;
+
+  function drawAnchors() {
+    anchorGraphics.clear();
+    if (!hoveredAnchor || hoveredAnchor.destroyed || !hoveredAnchor.pinned) return;
+
+    const dotRadius = 4 * fireScale();
+    const glowRadius = dotRadius * 2.2;
+    const p = hoveredAnchor;
+
+    anchorGraphics.beginFill(ANCHOR_GLOW_COLOR, 0.25);
+    anchorGraphics.drawCircle(p.x, p.y, glowRadius);
+    anchorGraphics.endFill();
+    anchorGraphics.beginFill(ANCHOR_DOT_COLOR, 0.95);
+    anchorGraphics.drawCircle(p.x, p.y, dotRadius);
+    anchorGraphics.endFill();
+  }
+
   const vertexSrc = `
     attribute vec2 aVertexPosition;
     attribute vec2 aTextureCoord;

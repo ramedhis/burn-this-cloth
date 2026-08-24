@@ -230,27 +230,6 @@
 
   input[type=file] { display: none; }
 
-  /* Same look as .preset-group/.preset-btn, kept separate so the
-     canvas-size preset JS (which queries .preset-btn globally)
-     never sees these */
-  .anchor-group {
-    display: flex;
-    border: 1px solid var(--line);
-    overflow: hidden;
-  }
-
-  .anchor-btn {
-    flex: 1 1 0;
-    border: none;
-    border-right: 1px solid var(--line);
-    white-space: nowrap;
-    padding-left: 4px;
-    padding-right: 4px;
-  }
-
-  .anchor-btn:last-child { border-right: none; }
-  .anchor-btn.active { background: var(--ink); color: #000; }
-
   /* Cloth hover frame: a thin rectangle traced around the cloth,
      positioned/sized in JS (see positionClothFrame in script.js) since
      it has to track the cloth's actual on-screen box, which moves and

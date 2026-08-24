@@ -18,15 +18,6 @@
     resetCloth(true);
   });
 
-  const anchorBtns = document.querySelectorAll('.anchor-btn');
-  anchorBtns.forEach((btn) => {
-    btn.addEventListener('click', () => {
-      anchorMode = btn.dataset.anchor;
-      anchorBtns.forEach((b) => b.classList.toggle('active', b === btn));
-      resetCloth(true);
-    });
-  });
-
   const gridToggleBtn = document.getElementById('gridToggleBtn');
   gridToggleBtn.addEventListener('click', () => {
     // Same deal as densityBtn above -- label just says "Mesh" always,
@@ -105,6 +96,8 @@
     updateFire(dt);
     updateMeshBuffers();
     drawGrid();
+    updateAnchorHover();
+    drawAnchors();
     updateFireSprites();
     updateBloom();
     if (isClothGone()) clothFrame.classList.remove('active');

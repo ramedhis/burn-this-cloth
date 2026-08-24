@@ -148,6 +148,60 @@
     }
   }
 
+  // Custom anchors: shift-click nails the nearest grid particle in
+  // place exactly where it's currently hanging (not back to its flat
+  // rest position -- see the pinX/pinY comment in buildGrid). Shift-
+  // clicking an already-pinned particle un-nails it instead. Snap
+  // radius is derived from the current grid spacing rather than a
+  // fixed pixel number, so a coarse grid and a fine one both feel
+  // equally easy to click a vertex on.
+  function anchorSnapRadiusSq() {
+    const spx = WIDTH / COLS, spy = HEIGHT / ROWS;
+    return (Math.max(spx, spy) * 0.75) ** 2;
+  }
+
+  function nearestParticleAt(pos) {
+    let best = null, bestDSq = Infinity;
+    for (const p of particles) {
+      if (p.destroyed) continue;
+      const dx = p.x - pos.x, dy = p.y - pos.y;
+      const dSq = dx * dx + dy * dy;
+      if (dSq < bestDSq) { bestDSq = dSq; best = p; }
+    }
+    return { particle: best, distSq: bestDSq };
+  }
+
+  function toggleAnchorAt(pos) {
+    const { particle: best, distSq } = nearestParticleAt(pos);
+    if (!best || distSq > anchorSnapRadiusSq()) return; // click missed the cloth
+
+    if (best.pinned) {
+      best.pinned = false;
+    } else {
+      best.pinned = true;
+      best.pinX = best.x;
+      best.pinY = best.y;
+    }
+  }
+
+  // Hover preview: while Shift is held, whichever existing anchor is
+  // under the cursor lights up (see drawAnchors in mesh-render.js) so
+  // it's clear a click will remove that specific point rather than
+  // planting a new one somewhere nearby. Recomputed once a frame in the
+  // main loop (updateAnchorHover) rather than only on mousemove, so it
+  // also reacts the instant Shift itself is pressed or released without
+  // needing the mouse to move first.
+  let hoveredAnchor = null;
+
+  function updateAnchorHover() {
+    if (!shiftHeld || !mouse.active || particles.length === 0) {
+      hoveredAnchor = null;
+      return;
+    }
+    const { particle: best, distSq } = nearestParticleAt({ x: mouse.x, y: mouse.y });
+    hoveredAnchor = (best && best.pinned && distSq <= anchorSnapRadiusSq()) ? best : null;
+  }
+
   // pointerDown + dragIgniteTimer drive the "drag a lit match across
   // the cloth" behavior in the main loop below: the initial press
   // still lands one full-strength ignite() immediately (so a plain
@@ -160,9 +214,19 @@
   const DRAG_IGNITE_INTERVAL = 0.045;
 
   canvas.addEventListener('mousedown', (e) => {
+    const pos = getPos(e);
+
+    // Shift turns a click into an anchor toggle instead of an ignite --
+    // same modifier key the cloth-frame resize handles use, but this is
+    // on the canvas itself so the two never fire on the same click.
+    if (e.shiftKey) {
+      toggleAnchorAt(pos);
+      return;
+    }
+
     pointerDown = true;
     dragIgniteTimer = DRAG_IGNITE_INTERVAL;
-    ignite(getPos(e));
+    ignite(pos);
   });
   window.addEventListener('mouseup', () => { pointerDown = false; });
 

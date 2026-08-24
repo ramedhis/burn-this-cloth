@@ -77,22 +77,13 @@
     return Math.max(pa.burn, pb.burn) < CUT_THRESHOLD;
   }
 
-  // Which grid points are pinned in place, picked from the panel
-  let anchorMode = 'edge';
+  // Default pin pattern on a fresh grid: the whole top row, same as
+  // before. There's no panel picker for this anymore -- past this
+  // starting point, anchors are placed and removed by hand (shift-click
+  // on the cloth, see toggleAnchorAt() in interaction.js), which flips
+  // a specific particle's own .pinned flag directly rather than going
+  // through this function again.
   function isPinned(i, j) {
-    if (anchorMode === 'three') {
-      if (j !== 0) return false;
-      const mid = Math.round(COLS / 2);
-      return i === 0 || i === COLS || i === mid;
-    }
-    if (anchorMode === 'eight') {
-      const midCol = Math.round(COLS / 2);
-      const midRow = Math.round(ROWS / 2);
-      const corner = (i === 0 || i === COLS) && (j === 0 || j === ROWS);
-      const topBottomMid = (j === 0 || j === ROWS) && i === midCol;
-      const leftRightMid = (i === 0 || i === COLS) && j === midRow;
-      return corner || topBottomMid || leftRightMid;
-    }
     return j === 0;
   }
 
@@ -111,6 +102,15 @@
         particles.push({
           x: rx, y: ry, oldX: rx, oldY: ry, restX: rx, restY: ry,
           pinned,
+          // Where a pinned particle actually holds itself, as opposed to
+          // restX/restY (the flat, undeformed layout position, which stays
+          // fixed forever for UV mapping and constraint rest-lengths).
+          // They start out equal -- a fresh grid is flat, so "pinned in
+          // place" and "pinned at its rest spot" are the same thing here
+          // -- but a custom anchor added later via shift-click nails the
+          // particle wherever it happens to be hanging at that moment
+          // (see toggleAnchorAt), which can be well off its rest position.
+          pinX: rx, pinY: ry,
           burn: 0,
           burning: false,
           destroyed: false,
@@ -140,7 +140,12 @@
     }
     refreshClothTexture();
     buildMeshObjects();
-    clothContainer.addChild(gridGraphics); // buildMeshObjects re-adds the mesh on top, pull the grid back above it
+    // buildMeshObjects() creates a brand-new mesh and adds it on top of
+    // everything already in clothContainer -- pull the grid wireframe
+    // and the anchor-point overlay back above it, or they'd silently end
+    // up rendering underneath the cloth surface after every rebuild.
+    clothContainer.addChild(gridGraphics);
+    clothContainer.addChild(anchorGraphics);
   }
 
   function applyCanvasSize(w, h) {
@@ -250,7 +255,10 @@
     for (let n = 0; n < particles.length; n++) {
       const p = particles[n];
       if (p.pinned && !p.destroyed) {
-        p.x = p.restX; p.y = p.restY; p.oldX = p.restX; p.oldY = p.restY;
+        // Holds at pinX/pinY (wherever it was nailed), not restX/restY
+        // (its original flat layout spot) -- see the pinX/pinY comment
+        // in buildGrid for why those two are kept separate.
+        p.x = p.pinX; p.y = p.pinY; p.oldX = p.pinX; p.oldY = p.pinY;
         continue;
       }
       if (p.destroyed) continue;
