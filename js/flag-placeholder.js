@@ -24,7 +24,7 @@ const SHAPES = ['circle', 'rect', 'diamond'];
 
 const LAYOUTS = [
   'shape-grid', 'block-columns', 'quadrant-composition',
-  'concentric', 'shape-row', 'overlap-composition',
+  'shape-row', 'shape-trio',
 ];
 
 // Structured column/row proportions -- curated rather than fully random,
@@ -33,24 +33,14 @@ const SCHEMES = [
   [1, 1], [1, 2], [2, 1], [1, 1, 1], [2, 1, 1], [1, 2, 1], [1, 1, 1, 1], [3, 1],
 ];
 
-// A few hand-placed compositions for the "poster" layout -- randomized
-// via color/mirror/template choice, but never scattered arbitrarily.
-const OVERLAP_TEMPLATES = [
-  [
-    { type: 'circle', x: 0.28, y: 0.52, size: 0.30 },
-    { type: 'rect', x: 0.74, y: 0.35, w: 0.34, h: 0.5 },
-    { type: 'diamond', x: 0.78, y: 0.82, size: 0.16 },
-  ],
-  [
-    { type: 'rect', x: 0.5, y: 0.55, w: 0.8, h: 0.3 },
-    { type: 'circle', x: 0.22, y: 0.24, size: 0.2 },
-    { type: 'diamond', x: 0.82, y: 0.22, size: 0.18 },
-  ],
-  [
-    { type: 'diamond', x: 0.5, y: 0.42, size: 0.26 },
-    { type: 'circle', x: 0.24, y: 0.72, size: 0.22 },
-    { type: 'rect', x: 0.76, y: 0.7, w: 0.32, h: 0.32 },
-  ],
+// Ways to tile the canvas into 3 non-overlapping regions -- one shape
+// gets centered in each, so shapes can never touch or overlap each
+// other, only the region boundaries can.
+const REGION_TEMPLATES = [
+  [{ x: 0, y: 0, w: 0.5, h: 1 }, { x: 0.5, y: 0, w: 0.5, h: 0.5 }, { x: 0.5, y: 0.5, w: 0.5, h: 0.5 }],
+  [{ x: 0, y: 0, w: 1, h: 0.5 }, { x: 0, y: 0.5, w: 0.5, h: 0.5 }, { x: 0.5, y: 0.5, w: 0.5, h: 0.5 }],
+  [{ x: 0, y: 0, w: 1 / 3, h: 1 }, { x: 1 / 3, y: 0, w: 1 / 3, h: 1 }, { x: 2 / 3, y: 0, w: 1 / 3, h: 1 }],
+  [{ x: 0, y: 0, w: 1, h: 1 / 3 }, { x: 0, y: 1 / 3, w: 1, h: 1 / 3 }, { x: 0, y: 2 / 3, w: 1, h: 1 / 3 }],
 ];
 
 function rand(n) {
@@ -94,13 +84,7 @@ function generateFlagSpec() {
       spec.scheme = SCHEMES[rand(SCHEMES.length)];
       break;
     case 'quadrant-composition':
-      spec.splitX = 0.4 + Math.random() * 0.2;
-      spec.splitY = 0.4 + Math.random() * 0.2;
       spec.shape = SHAPES[rand(SHAPES.length)];
-      break;
-    case 'concentric':
-      spec.rings = 2 + rand(3);
-      spec.shape = Math.random() < 0.5 ? 'circle' : 'rect';
       break;
     case 'shape-row':
       spec.direction = Math.random() < 0.5 ? 'horizontal' : 'vertical';
@@ -108,8 +92,9 @@ function generateFlagSpec() {
       spec.lines = 1 + rand(2);
       spec.shapeType = SHAPES[rand(SHAPES.length)];
       break;
-    case 'overlap-composition':
-      spec.template = rand(OVERLAP_TEMPLATES.length);
+    case 'shape-trio':
+      spec.template = rand(REGION_TEMPLATES.length);
+      spec.shapeType = SHAPES[rand(SHAPES.length)];
       spec.mirror = Math.random() < 0.5;
       break;
   }
@@ -117,7 +102,7 @@ function generateFlagSpec() {
   return spec;
 }
 
-// ---- shape primitive ----
+// ---- Shape Primitive ----
 // size = half-height; aspect stretches half-width for rect/diamond so
 // one function covers squares, rectangles, and rhombi.
 function drawShape(ctx, type, cx, cy, size, color, aspect = 1) {
@@ -145,8 +130,7 @@ function drawShape(ctx, type, cx, cy, size, color, aspect = 1) {
   }
 }
 
-// ---- layouts ----
-
+// ---- Layouts ----
 function drawShapeGrid(ctx, rect, spec) {
   const { x, y, w, h } = rect;
   const { cols, rows, shapeType, fillProbability, colors } = spec;
@@ -186,29 +170,25 @@ function drawBlockColumns(ctx, rect, spec) {
 
 function drawQuadrantComposition(ctx, rect, spec) {
   const { x, y, w, h } = rect;
-  const { splitX, splitY, colors, shape } = spec;
-  const midX = x + w * splitX;
-  const midY = y + h * splitY;
-  ctx.fillStyle = colors[0]; ctx.fillRect(x, y, midX - x, midY - y);
-  ctx.fillStyle = colors[1 % colors.length]; ctx.fillRect(midX, y, x + w - midX, midY - y);
-  ctx.fillStyle = colors[2 % colors.length]; ctx.fillRect(x, midY, midX - x, y + h - midY);
-  ctx.fillStyle = colors[3 % colors.length]; ctx.fillRect(midX, midY, x + w - midX, y + h - midY);
+  const { colors, shape } = spec;
+  const midX = x + w / 2;
+  const midY = y + h / 2;
+  const pad = 1; // 1px overlap so sub-pixel rounding never leaves a hairline seam
+
+  // Base fill covers the whole rect (and doubles as the top-left quadrant);
+  // the other three are drawn on top, each overlapping its shared edges.
+  ctx.fillStyle = colors[0];
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = colors[1 % colors.length];
+  ctx.fillRect(midX - pad, y, x + w - midX + pad, midY - y + pad);
+  ctx.fillStyle = colors[2 % colors.length];
+  ctx.fillRect(x, midY - pad, midX - x + pad, y + h - midY + pad);
+  ctx.fillStyle = colors[3 % colors.length];
+  ctx.fillRect(midX - pad, midY - pad, x + w - midX + pad, y + h - midY + pad);
 
   const cx = x + w / 2, cy = y + h / 2;
   const size = Math.min(w, h) * 0.28;
   drawShape(ctx, shape, cx, cy, size, colors[colors.length - 1]);
-}
-
-function drawConcentric(ctx, rect, spec) {
-  const { x, y, w, h } = rect;
-  const { rings, shape, colors } = spec;
-  const cx = x + w / 2, cy = y + h / 2;
-  const maxSize = Math.max(w, h) * 0.42;
-  const aspect = shape === 'rect' ? w / h : 1;
-  for (let i = rings; i >= 0; i--) {
-    const frac = i / rings;
-    drawShape(ctx, shape, cx, cy, maxSize * frac, colors[i % colors.length], aspect);
-  }
 }
 
 function drawShapeRow(ctx, rect, spec) {
@@ -229,24 +209,25 @@ function drawShapeRow(ctx, rect, spec) {
   }
 }
 
-function drawOverlapComposition(ctx, rect, spec) {
+// Tiles the canvas into 3 non-overlapping regions and centers one shape
+// in each -- shapes can never touch since their regions don't either.
+function drawShapeTrio(ctx, rect, spec) {
   const { x, y, w, h } = rect;
-  const { colors, template, mirror } = spec;
+  const { colors, template, shapeType, mirror } = spec;
   ctx.fillStyle = colors[0];
   ctx.fillRect(x, y, w, h);
-  const shapes = OVERLAP_TEMPLATES[template];
-  shapes.forEach((s, i) => {
-    const fx = mirror ? 1 - s.x : s.x;
-    const cx = x + w * fx;
-    const cy = y + h * s.y;
-    const color = colors[(i + 1) % colors.length];
-    if (s.type === 'rect') {
-      const hh = (h * s.h) / 2;
-      const aspect = (w * s.w) / (h * s.h);
-      drawShape(ctx, 'rect', cx, cy, hh, color, aspect);
-    } else {
-      drawShape(ctx, s.type, cx, cy, Math.min(w, h) * s.size, color);
-    }
+
+  const regions = REGION_TEMPLATES[template];
+  regions.forEach((r, i) => {
+    const rx = mirror ? 1 - r.x - r.w : r.x;
+    const regionX = x + w * rx;
+    const regionY = y + h * r.y;
+    const regionW = w * r.w;
+    const regionH = h * r.h;
+    const cx = regionX + regionW / 2;
+    const cy = regionY + regionH / 2;
+    const size = Math.min(regionW, regionH) * 0.32; // margin inside its own region
+    drawShape(ctx, shapeType, cx, cy, size, colors[(i + 1) % colors.length]);
   });
 }
 
@@ -260,9 +241,8 @@ function drawFlagPattern(ctx, rect, spec) {
     case 'shape-grid': drawShapeGrid(ctx, rect, spec); break;
     case 'block-columns': drawBlockColumns(ctx, rect, spec); break;
     case 'quadrant-composition': drawQuadrantComposition(ctx, rect, spec); break;
-    case 'concentric': drawConcentric(ctx, rect, spec); break;
     case 'shape-row': drawShapeRow(ctx, rect, spec); break;
-    case 'overlap-composition': drawOverlapComposition(ctx, rect, spec); break;
+    case 'shape-trio': drawShapeTrio(ctx, rect, spec); break;
   }
 
   ctx.restore();
