@@ -1,13 +1,4 @@
 // === texture.js ===
-// Part of the burn-this-cloth engine. Loaded as a plain <script> (not a
-// module) in index.html, in the same order these sections used to appear
-// inside the single big IIFE in the old script.js. All the let/const/function
-// declarations below live at the top level of the page's shared script scope
-// (that's just how classic, non-module <script> tags work -- each one's
-// top-level declarations join one common global scope), so a name declared in
-// an earlier-loaded file is already available here, and a name declared here is
-// available to any file loaded after it -- no window.* namespace object, no
-// imports, nothing to wire up by hand.
 
   // texCanvas stays a plain 2D canvas -- it's just where we composite
   // the source image (or placeholder gradient) before handing the
@@ -36,11 +27,6 @@
   let bgSprite = null;
 
   function drawBackgroundCanvas() {
-    // Used to optionally draw a user-loaded background image here too
-    // (cover-fit, same as the cloth image); that feature's gone now --
-    // plain black is the only look this layer ever needs to produce,
-    // it's just here so scorch/bloom have something underneath them
-    // to composite onto.
     bgCtx.fillStyle = '#000000';
     bgCtx.fillRect(0, 0, VIEW_W, VIEW_H);
   }
@@ -55,13 +41,11 @@
     bgContainer.addChild(bgSprite);
   }
 
-  // Persistent scorch layer. Right now the second a hole tears open in
-  // the mesh, the burn just disappears -- no trace it was ever there,
-  // like the fire event never happened. This is a plain 2D canvas
-  // sitting in screen space (same footprint as bgCanvas) that gets
-  // soot stamped onto it once, permanently, the moment a patch of
-  // cloth actually burns through. It's cheap because stamping only
-  // happens on that one transition, never per-frame.
+  // Persistent scorch layer. This is a plain 2D canvas sitting in
+  // screen space (same footprint as bgCanvas) that gets soot stamped
+  // onto it once, permanently, the moment a patch of cloth actually
+  // burns through. It's cheap because stamping only happens on that
+  // one transition, never per-frame.
   const scorchCanvas = document.createElement('canvas');
   scorchCanvas.width = VIEW_W;
   scorchCanvas.height = VIEW_H;

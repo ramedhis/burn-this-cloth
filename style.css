@@ -15,10 +15,7 @@
     overflow: hidden;
   }
 
-  /* Full-bleed: the stage IS the page now, edge to edge. The old
-     letterboxed box (sized by JS to fit an aspect ratio, centered by
-     this flex rule) is gone -- the "gap" people see is drawn inside
-     the canvas itself now, not left as bare page around a smaller box. */
+  /* Full-bleed. */
   .stage-wrap {
     height: 100%;
   }
@@ -214,9 +211,6 @@
     border-color: var(--ink);
   }
 
-  /* The one button that actually wipes cloth/fire state, so it gets
-     the same red as the title accent instead of blending into the
-     rest of the panel */
   #resetBtn {
     border-color: #d1453d;
     color: #d1453d;
@@ -230,12 +224,6 @@
 
   input[type=file] { display: none; }
 
-  /* Cloth hover frame: a thin rectangle traced around the cloth,
-     positioned/sized in JS (see positionClothFrame in script.js) since
-     it has to track the cloth's actual on-screen box, which moves and
-     resizes with the window and with canvas-size changes. Invisible
-     and non-interactive at rest so it never gets in the way of
-     pushing/igniting the cloth underneath it. */
   .cloth-frame {
     position: absolute;
     z-index: 2;
@@ -248,14 +236,6 @@
 
   .cloth-frame.active { opacity: 1; }
 
-  /* The four grab strips laid along the frame's edges. Sized a bit
-     thicker than the 1px border they sit on (12px) so there's an
-     actual target to grab rather than a hairline -- pointer-events
-     stays off until the frame is .active, same rule the toolbar
-     already follows, so an idle frame still can't eat a click meant
-     for the cloth/canvas underneath it. z-index keeps them below the
-     toolbar specifically, since the top strip and the toolbar overlap
-     near the middle of the top edge. */
   .cloth-edge-handle {
     position: absolute;
     pointer-events: none;
@@ -295,16 +275,6 @@
     cursor: ew-resize;
   }
 
-  /* Small squares sitting right on the frame's four corners -- resize
-     both dimensions at once, so unlike the edges they don't have a
-     Shift-less "move" role to fall back to. Kept off entirely (pointer-
-     events:none) until Shift is actually down, not just until the frame
-     is active, since a bare hover with no modifier key should still let
-     a click at the very corner fall through to a move-drag on whichever
-     edge strip it overlaps rather than being eaten by a handle with
-     nothing to do. z-index puts them above both the edge strips and the
-     toolbar, so the exact corner pixel always resolves to "resize" once
-     Shift is down, even where a strip happens to run underneath it. */
   .cloth-corner-handle {
     position: absolute;
     width: 16px;
@@ -322,14 +292,6 @@
   .cloth-corner-handle.corner-tr { top: -8px; right: -8px; cursor: nesw-resize; }
   .cloth-corner-handle.corner-bl { bottom: -8px; left: -8px; cursor: nesw-resize; }
 
-  /* Both groups sit on the frame's own top edge, straddling it
-     (translateY -50%) the way a tab sits on a folder edge, so they
-     read as attached to the rectangle rather than floating above it.
-     Only clickable once the frame is active -- pointer-events stays
-     off otherwise so an invisible toolbar can't quietly eat a click
-     meant for the cloth. Left/right positioning itself lives in the
-     -left/-right modifiers below, since the two groups anchor to
-     opposite edges instead of sharing one centered position. */
   .cloth-toolbar {
     position: absolute;
     top: 0;
@@ -341,13 +303,6 @@
     transition: opacity 0.15s ease;
   }
 
-  /* The frame's box is FRAME_GAP (16px in script.js) wider than the
-     cloth on every side, so "left:0"/"right:0" here would line these
-     groups up with the FRAME, not the cloth itself. Offsetting by
-     that same 16px is what makes Load's left edge and Remove's right
-     edge actually land flush with the cloth's own left/right edges --
-     if FRAME_GAP ever changes in script.js, this 16px needs to follow
-     it to stay lined up. */
   .cloth-toolbar-left { left: 16px; }
   .cloth-toolbar-right { right: 16px; }
 
@@ -357,25 +312,11 @@
     z-index: 2; /* above .cloth-edge-handle, so the top strip never steals a click meant for these buttons */
   }
 
-  /* Just plain Shift being held hides the whole toolbar, not only while
-     hovering a resize handle -- shift-hovering the cloth is for the
-     anchor UI (single/edge-line toggling, see interaction.js) now, so
-     the load/density/mesh/remove buttons sitting on top of that same
-     frame would otherwise be visible clutter (and, worse, a stray
-     click target) the entire time someone's aiming an anchor. Comes
-     back the instant Shift is released. */
   .cloth-frame.shift-armed .cloth-toolbar {
     opacity: 0 !important;
     pointer-events: none !important;
   }
 
-  /* Slapped on <body> for the duration of a cloth drag (see script.js)
-     so the "move" cursor holds steady even if the pointer briefly
-     outruns the 12px handle strip mid-drag, instead of flickering back
-     to the default arrow every time that happens. Same idea for a
-     resize drag, just with four possible cursor shapes instead of one
-     -- script.js picks whichever class matches the handle that started
-     the drag. */
   body.cloth-dragging,
   body.cloth-dragging *,
   body.cloth-resizing-ns,
@@ -415,14 +356,8 @@
     background: var(--wash);
   }
 
-  /* Load and Remove swap places rather than sitting side by side --
-     see updateImageToolButtons() in script.js -- so there's only ever
-     one obviously-correct action showing for the current state. */
   .cloth-tool-btn.hidden { display: none; }
 
-  /* Same red accent as #resetBtn in the side panel -- both buttons are
-     the "exit" action for their respective UI (resetBtn wipes state,
-     this one dismisses the panel), so they share the color language. */
   .cloth-close-btn {
     border-color: #d1453d;
     color: #d1453d;
@@ -434,13 +369,6 @@
     border-color: #d1453d;
   }
 
-  /* Resize popup: a second, lighter floating window in the same visual
-     language as .panel above (same background/border/font-size), just
-     smaller and opened/closed from the cloth's own toolbar instead of
-     always being on screen. Positioned away from the side panel's own
-     top-left corner by default so the two don't start out stacked;
-     panel.js's drag handler (same mechanism as the side panel's) takes
-     over from there via inline left/top, same as .panel does. */
   .resize-popup {
     position: fixed;
     top: 90px; left: 320px;

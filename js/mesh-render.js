@@ -1,13 +1,4 @@
 // === mesh-render.js ===
-// Part of the burn-this-cloth engine. Loaded as a plain <script> (not a
-// module) in index.html, in the same order these sections used to appear
-// inside the single big IIFE in the old script.js. All the let/const/function
-// declarations below live at the top level of the page's shared script scope
-// (that's just how classic, non-module <script> tags work -- each one's
-// top-level declarations join one common global scope), so a name declared in
-// an earlier-loaded file is already available here, and a name declared here is
-// available to any file loaded after it -- no window.* namespace object, no
-// imports, nothing to wire up by hand.
 
   // GPU mesh:
   // A single PIXI.Mesh covering the whole cloth. Vertex positions and
@@ -105,8 +96,7 @@
   }
 
   // Ambient heat bleed for the pre-scorch glow (feeds the fragment
-  // shader's vHeatGlow/preheat block below). Purely visual -- doesn't
-  // touch the actual physics or a vertex's own burn value at all, it
+  // shader's vHeatGlow/preheat block below). Purely visual -- it
   // just looks a couple of grid cells out and reports how hot the
   // hottest nearby thing currently is, decayed by distance. A vertex
   // sitting right next to a fully-burning neighbor reads almost as hot
@@ -156,12 +146,7 @@
 
   // Anchor highlight overlay: shift-clicking the cloth (see
   // toggleAnchorAt in interaction.js) nails or un-nails individual grid
-  // points. Anchors stay invisible at rest -- nothing is drawn here
-  // until Shift is held AND the cursor is actually sitting on top of an
-  // existing anchor (hoveredAnchor, tracked by updateAnchorHover in
-  // interaction.js), at which point just that one point reveals itself:
-  // a soft white glow around a solid grey dot. Move off it, or let go of
-  // Shift, and it disappears again.
+  // points.
   const anchorGraphics = new PIXI.Graphics();
   clothContainer.addChild(anchorGraphics);
   const ANCHOR_DOT_COLOR = 0x999999;
@@ -187,10 +172,7 @@
   // one of the cloth's four boundary lines and dwelling there for a
   // moment lights up the whole line, previewing what a click will
   // pin -- see updateEdgeHover/pinEdge in interaction.js for the
-  // hover-timing and the actual pinning. Drawn as two passes over the
-  // same path (a wide soft one, a thin crisp one) for the same glow-
-  // around-a-solid-core look drawAnchors uses for a single point,
-  // just stretched into a line instead of a dot.
+  // hover-timing and the actual pinning.
   const edgeHighlightGraphics = new PIXI.Graphics();
   clothContainer.addChild(edgeHighlightGraphics);
 
@@ -204,9 +186,6 @@
     const glowWidth = 10 * fireScale();
     const lineWidth = 2.5 * fireScale();
 
-    // Two passes, not one path reused -- each needs its own moveTo/lineTo
-    // walk since Pixi's Graphics bakes lineStyle per-segment as you draw,
-    // not retroactively over a path you've already laid down.
     for (const [width, alpha] of [[glowWidth, 0.18], [lineWidth, 0.9]]) {
       edgeHighlightGraphics.lineStyle(width, 0xffffff, alpha);
       let started = false;
@@ -268,13 +247,9 @@
       vec4 texColor = texture2D(uSampler, vTextureCoord);
       float t = clamp(vBurn, 0.0, 1.0);
 
-      // A dropped-in photo comes in glossy-print vibrant -- dyed
-      // fabric never looks like that, ink sinks into the weave
-      // instead of sitting on a reflective surface. Pull it toward
-      // something closer to printed cloth: a bit less saturated, a
-      // bit less contrasty, a bit less bright. Small nudges on
-      // purpose -- enough to read as "this is fabric" without it
-      // looking washed out or grey.
+      // Pull it toward something closer to printed cloth: a bit
+      // less saturated, a bit less contrasty, a bit less bright.
+      // Small nudges on purpose.
       float luma = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
       vec3 fabricColor = mix(texColor.rgb, vec3(luma), 0.22);
       fabricColor = mix(vec3(0.5), fabricColor, 0.85);
@@ -291,34 +266,23 @@
       vec3 lit = clamp(fabricColor * (1.0 + shade * 0.85), 0.0, 1.0);
 
       // Ambient heat bleeding in from nearby active fire, entirely
-      // separate from this vertex's own char band below -- this is
-      // what lets a patch of cloth two or three cells from a flame
-      // visibly warm and darken before it's ever actually burning
-      // itself, instead of staying perfectly untouched right up until
-      // the instant it catches. Fades out fast once real burning
-      // starts here (the (1.0 - t-based term)) so it hands off to the
-      // char band instead of doubling up with it.
+      // separate from this vertex's own char band below. Fades out
+      // fast once real burning starts here (the (1.0 - t-based term))
+      // so it hands off to the char band instead of doubling up with it.
       float preheat = clamp(vHeatGlow, 0.0, 1.0) * (1.0 - smoothstep(0.0, 0.3, t));
       vec3 preheatColor = vec3(0.24, 0.09, 0.03);
       lit = mix(lit, preheatColor, preheat * 0.5);
 
       // Char: fabric burns down toward near-black charcoal well
-      // before the hole opens -- this is the "already burnt, cooling"
-      // band that rings any real burn hole, sitting between the
-      // untouched fabric and the active fire ring below. Widened so
-      // it reads as a real band of charred cloth, not a thin line.
+      // before the hole opens.
       vec3 charColor = vec3(0.045, 0.032, 0.026);
       float charAmt = smoothstep(0.04, 0.50, t);
       vec3 charred = mix(lit, charColor, charAmt);
 
-      // Fire ring: the actual combustion front. This is what was
-      // missing -- a band of near-white/yellow heat sitting right at
-      // the tearing edge, between the char and the hole, not smeared
-      // across the whole burn like a generic tint. It peaks just
-      // below CUT_THRESHOLD (0.72 on the JS side), so the brightest
-      // pixels are the ones about to become a hole, and fades back
-      // toward the char. Widened further (starts earlier) so it has
-      // real width instead of flashing by as a sliver.
+      // Fire ring: the actual combustion front. It peaks just below
+      // CUT_THRESHOLD (0.72 on the JS side), so the brightest pixels
+      // are the ones about to become a hole, and fades back toward
+      // the char.
       float ring = smoothstep(0.30, 0.55, t) * (1.0 - smoothstep(0.55, 0.74, t));
       vec3 emberColor = mix(vec3(1.0, 0.45, 0.08), vec3(1.0, 0.92, 0.62), smoothstep(0.34, 0.58, t));
       vec3 finalColor = mix(charred, emberColor, ring);
@@ -398,11 +362,7 @@
         const p00 = particles[v00], p10 = particles[v10], p01 = particles[v01], p11 = particles[v11];
 
         // Flip which corner the diagonal runs through every other
-        // cell (checkerboard). Splitting every cell the same way was
-        // the other half of the "triangle mesh" look -- once a few
-        // adjacent cells burned through, the missing wedges all
-        // pointed the same direction and the tear read as a straight
-        // sawtooth cut instead of a ragged hole.
+        // cell (checkerboard).
         if ((i + j) % 2 === 0) {
           if (linkIntact(p00, p10) && linkIntact(p10, p11) && linkIntact(p00, p11)) {
             indices[n++] = v00; indices[n++] = v10; indices[n++] = v11;

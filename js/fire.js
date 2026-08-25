@@ -1,13 +1,4 @@
 // === fire.js ===
-// Part of the burn-this-cloth engine. Loaded as a plain <script> (not a
-// module) in index.html, in the same order these sections used to appear
-// inside the single big IIFE in the old script.js. All the let/const/function
-// declarations below live at the top level of the page's shared script scope
-// (that's just how classic, non-module <script> tags work -- each one's
-// top-level declarations join one common global scope), so a name declared in
-// an earlier-loaded file is already available here, and a name declared here is
-// available to any file loaded after it -- no window.* namespace object, no
-// imports, nothing to wire up by hand.
 
   // Fire particles -- same spawn/update logic as before, just
   // rendered as pooled GPU sprites instead of ctx.arc() calls.
@@ -35,13 +26,6 @@
       wobble: Math.random() * Math.PI * 2,
       wobble2: Math.random() * Math.PI * 2,
       flicker: Math.random() * 10,
-      // How this particular tongue catches an ambient gust: lean is
-      // its current bend (eased toward the gust target rather than
-      // snapping to it), windRate is how fast it catches up, windMul
-      // is how strongly it responds at all. Randomized per-flame so a
-      // gust doesn't bend every flame on screen by the identical
-      // amount on the identical frame -- that perfect unison was what
-      // read as a cardboard cutout sliding rather than fire.
       lean: 0,
       windRate: 3 + Math.random() * 6,
       windMul: 0.5 + Math.random() * 0.9,
@@ -77,13 +61,7 @@
   }
 
   // Everything that's ever destroyed the cloth so far reads as
-  // upward-drifting smoke -- true of the actual flame, but a burned-
-  // through patch should also leave something that falls and settles,
-  // or the destruction only ever reads as "gone," never as "landed
-  // somewhere." Flakes get a light gravity and a papery side-to-side
-  // flutter (same idea as a falling leaf) instead of a straight drop,
-  // which is what actually sells "weightless burnt scrap" over "small
-  // rock."
+  // upward-drifting smoke. 
   function spawnAshFlake(x, y) {
     if (ashFlakes.length > MAX_ASH) return;
     const fs = fireScale();
@@ -107,15 +85,7 @@
   function updateFire(dt) {
     for (const p of particles) {
       if (p.destroyed) continue;
-      // A scrap that's torn loose and fallen past the bottom of the
-      // window is, as far as the eye's concerned, already gone (this
-      // is the same cutoff isClothGone() uses) -- but the physics sim
-      // has no idea the window has an edge and keeps right on
-      // "burning" it in cloth-space forever. Without this check that
-      // still-burning-but-invisible particle kept spawning smoke,
-      // which then drifted back up into view right around the bottom
-      // edge -- a stray wisp with no visible source, right where the
-      // hover frame's own bottom edge sits.
+
       const screenY = originY + p.y * clothScale;
       if (screenY > VIEW_H) continue;
       if (p.burning) {
@@ -151,20 +121,6 @@
       // not bending. Each flame's own windRate/windMul (set at spawn)
       // keeps every tongue catching the gust a little differently
       // instead of the whole fire leaning over in one rigid unit.
-      //
-      // lean is a velocity-like quantity, same units as vx/sway right
-      // below it -- it gets summed with them and the whole thing is
-      // multiplied by dt once. An earlier pass at this also multiplied
-      // lean by an extra 30 on top, meant to make the bend feel
-      // stronger, but since windPower can run into the thousands
-      // (px/s, same range MOUSE_SPEED_CAP allows) that extra factor
-      // sent flames dozens to hundreds of pixels sideways in a single
-      // frame -- which doesn't read as "wind," it reads as the sprite
-      // teleporting, which is exactly the "duplicate trailing copies"
-      // look. FLAME_WIND_GAIN is its own (much smaller) gain than the
-      // cloth's WIND_GAIN for that reason, and the target is clamped
-      // outright so no cursor speed, however fast, can produce more
-      // than a firm-but-plausible push.
       const gustTarget = clamp(windDirX * windPower * FLAME_WIND_GAIN * f.windMul, -FLAME_LEAN_MAX, FLAME_LEAN_MAX);
       f.lean += (gustTarget - f.lean) * Math.min(1, f.windRate * dt);
       f.x += (f.vx + sway + f.lean) * dt;
@@ -248,23 +204,9 @@
   const flamePool = makePool(flameContainerObj, flameTex, MAX_FLAMES + 10, true);
   const emberPool = makePool(emberContainerObj, emberTex, MAX_EMBERS + 10, true);
   const smokePool = makePool(smokeContainerObj, smokeTex, MAX_SMOKE + 10, false);
-  // Ash rides in the smoke layer, not its own -- it's the same "what's
-  // left after the fire" family visually, just heavier and falling
-  // instead of rising, so there's no reason to give it a separate
-  // container in the render order.
   const ashPool = makePool(smokeContainerObj, ashTex, MAX_ASH + 10, false);
-  // Bloom lights live in screen-space bloomContainer, defined up near
-  // bgContainer -- see updateBloom() below for how they're placed.
   const MAX_BLOOM_LIGHTS = 18;
   const bloomPool = makePool(bloomContainer, bloomTex, MAX_BLOOM_LIGHTS, true);
-  // Same cluster data, second pool -- clothBloomContainer lives inside
-  // worldRoot, so these get positioned directly in cloth-space and the
-  // camera transform does the rest. This is what washes the fire's
-  // light across nearby UNBURNT fabric, not just the backdrop behind
-  // it -- without it, the fire only ever affects the exact pixels
-  // that are already on fire (via glowPool) or the wall behind the
-  // cloth (via bloomPool), and the rest of the fabric stays totally
-  // unaware a fire is happening a few inches away.
   const fabricBloomPool = makePool(clothBloomContainer, bloomTex, MAX_BLOOM_LIGHTS, true);
 
   // Rebuilt whenever the grid resolution or canvas size changes,
@@ -431,10 +373,7 @@
     // Same clusters, but placed straight in cloth-space (no
     // origin/clothScale conversion needed -- clothBloomContainer sits
     // inside worldRoot, which already applies that transform to
-    // everything in it). Bigger and much dimmer than the backdrop
-    // version: this is meant to read as "the fire nearby is warming
-    // this fabric a little," not as its own light source competing
-    // with the actual char/ember shader right at the burn front.
+    // everything in it).
     for (let k = 0; k < fabricBloomPool.length; k++) {
       const s = fabricBloomPool[k];
       if (k >= bloomOrder.length) { s.visible = false; continue; }

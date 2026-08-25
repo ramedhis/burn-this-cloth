@@ -1,28 +1,9 @@
 // === cloth-physics.js ===
-// Part of the burn-this-cloth engine. Loaded as a plain <script> (not a
-// module) in index.html, in the same order these sections used to appear
-// inside the single big IIFE in the old script.js. All the let/const/function
-// declarations below live at the top level of the page's shared script scope
-// (that's just how classic, non-module <script> tags work -- each one's
-// top-level declarations join one common global scope), so a name declared in
-// an earlier-loaded file is already available here, and a name declared here is
-// available to any file loaded after it -- no window.* namespace object, no
-// imports, nothing to wire up by hand.
 
   function idx(i, j) { return j * (COLS + 1) + i; }
 
   let particles = [];
 
-  // True once there's nothing left of the cloth to see -- either every
-  // particle has actually burned through, or whatever's left has torn
-  // free and fallen off the bottom of the window. A scrap that ripped
-  // loose and dropped out of view is just as gone as one that burned
-  // up; the physics sim has no idea the window has an edge (particles
-  // keep falling in cloth-space forever), so "off past VIEW_H" is what
-  // "gone" looks like for a piece that never actually finished
-  // burning. At that point there's no cloth left to trace a rectangle
-  // around, so the hover frame shouldn't be able to show up either,
-  // until a reload/reset brings particles back.
   function isClothGone() {
     if (particles.length === 0) return false;
     for (let n = 0; n < particles.length; n++) {
@@ -35,11 +16,7 @@
   }
 
   // Structural + shear constraints between neighbouring particles.
-  // This is the entire support structure. A point stays up only
-  // because an unbroken chain of these links connects it, particle by
-  // particle, back to a still-intact pinned point on the top row.
-  // Burn a link and only the particles that actually depended on
-  // that specific link lose support.
+  // This is the entire support structure.
   let constraints = [];
 
   function addConstraint(a, b, diagonal) {
@@ -77,24 +54,12 @@
     return Math.max(pa.burn, pb.burn) < CUT_THRESHOLD;
   }
 
-  // Default pin pattern on a fresh grid: the whole top row, same as
-  // before. There's no panel picker for this anymore -- past this
-  // starting point, anchors are placed and removed by hand (shift-click
-  // on the cloth, see toggleAnchorAt() in interaction.js), which flips
-  // a specific particle's own .pinned flag directly rather than going
-  // through this function again.
+  // Default pin pattern on a fresh grid: the whole top row.
   function isPinned(i, j) {
     return j === 0;
   }
 
-  // Which boundary line (if any) a particle sits on, and the full
-  // ordered list of grid indices running along one of those lines --
-  // the two halves of "hover an edge, click to anchor the whole
-  // thing" (see updateEdgeHover/pinEdge in interaction.js). A corner
-  // particle satisfies two of these at once; top/bottom win over
-  // left/right since that's the pair checked first below -- doesn't
-  // matter much in practice, it just has to pick one edge consistently
-  // for the highlight to lock onto.
+  // Which boundary line (if any) a particle sits on.
   function edgeOf(p) {
     if (p.gj === 0) return 'top';
     if (p.gj === ROWS) return 'bottom';
@@ -137,11 +102,6 @@
           // Where a pinned particle actually holds itself, as opposed to
           // restX/restY (the flat, undeformed layout position, which stays
           // fixed forever for UV mapping and constraint rest-lengths).
-          // They start out equal -- a fresh grid is flat, so "pinned in
-          // place" and "pinned at its rest spot" are the same thing here
-          // -- but a custom anchor added later via shift-click nails the
-          // particle wherever it happens to be hanging at that moment
-          // (see toggleAnchorAt), which can be well off its rest position.
           pinX: rx, pinY: ry,
           burn: 0,
           burning: false,
@@ -172,10 +132,6 @@
     }
     refreshClothTexture();
     buildMeshObjects();
-    // buildMeshObjects() creates a brand-new mesh and adds it on top of
-    // everything already in clothContainer -- pull the grid wireframe
-    // and the anchor-point overlay back above it, or they'd silently end
-    // up rendering underneath the cloth surface after every rebuild.
     clothContainer.addChild(gridGraphics);
     clothContainer.addChild(anchorGraphics);
     clothContainer.addChild(edgeHighlightGraphics);
@@ -193,15 +149,7 @@
 
   // Cloth physics: Verlet integration + iterative distance-constraint
   // solving (the standard "position based dynamics" approach browser
-  // cloth demos use). No point is ever sprung back toward its own
-  // original position -- the only thing holding anything up is the
-  // literal chain of intact constraints back to a pinned point.
-  // Gravity is constant and universal; there's no separate "torn
-  // freefall" gravity vs "still attached" gravity, because there's no
-  // separate "attached" state to switch on anymore -- a fully cut-off
-  // flap simply has no intact constraints reaching the anchor, so
-  // nothing holds it back from falling, which the solver produces for
-  // free instead of needing a special case.
+  // cloth demos use).
   const DAMPING = 0.985;
   const GRAVITY = 780;
   const GRAVITY_BURN_EXTRA = 260; // weakened (but not yet cut) fibers sag a bit extra
@@ -211,18 +159,7 @@
   const CONSTRAINT_ITERATIONS = 5;
 
   // Wind: separate from the PUSH_* stuff above, which just shoves the
-  // fabric away from wherever the cursor is. This instead looks at
-  // how the cursor is moving and blows the cloth along that same
-  // direction, scaled by how fast it's moving -- wave your mouse
-  // across it like fanning a curtain and the fabric billows with it;
-  // stand still and it settles back down.
-  //
-  // A first pass at this just applied cursor velocity as a force
-  // near the cursor, and it just looked like the cloth getting shoved
-  // -- a real gust doesn't hit as one rigid slab, it rolls through
-  // the fabric as a wave, so nearby columns are pushed at slightly
-  // different times and by slightly different amounts. That's what
-  // windPower + the traveling sine term below are for.
+  // fabric away from wherever the cursor is.
   const WIND_GAIN = 0.45;       // Force per unit of eased gust strength (px/s)
   const WIND_RESPONSE = 7;      // How fast the gust ramps up when you move fast
   const WIND_DECAY = 2.0;       // How fast it eases back down once you slow/stop
@@ -233,11 +170,7 @@
   const MOUSE_SPEED_CAP = 4000; // px/s -- keeps one laggy frame from launching the cloth
 
   // Flames get their own (much gentler) read on the same gust system,
-  // capped outright rather than just eased -- windPower can run into
-  // the thousands on a fast swipe (same range MOUSE_SPEED_CAP allows),
-  // which is fine as an acceleration term for the cloth's spring solver
-  // but was wildly too much as a direct per-frame position shift for
-  // an unconstrained sprite.
+  // capped outright rather than just eased.
   const FLAME_WIND_GAIN = 0.12;
   const FLAME_LEAN_MAX = 90;
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -248,20 +181,11 @@
   let windDirX = 1, windDirY = 0; // last direction the gust was heading
 
   // Cursor position updates every mousemove, but mousemove doesn't
-  // fire on a tidy schedule -- so instead of trusting a single event's
-  // delta, this samples position once per physics step and smooths
-  // the resulting velocity. That's also what keeps a single stray
-  // jump (e.g. re-entering the canvas somewhere completely different)
-  // from registering as one absurd gust.
+  // fire on a tidy schedule.
   function updateMouseVelocity(dt) {
     if (shiftHeld) {
       // Shift-hover drives the anchor UI (single-point and edge-line
-      // toggling, see interaction.js) -- it's not supposed to also push
-      // or fan the cloth around while you're aiming it. Bailing out
-      // here entirely, rather than just skipping the force-application
-      // step below, is what keeps windPower pinned at zero for the
-      // whole time Shift is held instead of quietly charging up out of
-      // sight and then dumping a stored gust the instant it's released.
+      // toggling, see interaction.js).
       mouse.vx = 0; mouse.vy = 0; mouse.speed = 0;
       windPower = 0;
       mouse.px = mouse.x; mouse.py = mouse.y;
@@ -284,10 +208,7 @@
     mouse.speed = Math.hypot(mouse.vx, mouse.vy);
     mouse.px = mouse.x; mouse.py = mouse.y;
 
-    // windPower eases toward the current speed rather than tracking it
-    // 1:1 -- ramping up fast but decaying slower is what makes a swipe
-    // feel like it kicks off a gust that then has to die down, instead
-    // of the wind just being "on" exactly while the mouse is moving.
+    // windPower eases toward the current speed rather than tracking it 1:1
     const target = mouse.active ? mouse.speed : 0;
     const rate = target > windPower ? WIND_RESPONSE : WIND_DECAY;
     windPower += (target - windPower) * Math.min(1, rate * dt);
@@ -302,8 +223,7 @@
       const p = particles[n];
       if (p.pinned && !p.destroyed) {
         // Holds at pinX/pinY (wherever it was nailed), not restX/restY
-        // (its original flat layout spot) -- see the pinX/pinY comment
-        // in buildGrid for why those two are kept separate.
+        // (its original flat layout spot).
         p.x = p.pinX; p.y = p.pinY; p.oldX = p.pinX; p.oldY = p.pinY;
         continue;
       }
@@ -329,14 +249,6 @@
       }
 
       if (windPower > 3) {
-
-        // The gust isn't the same strength everywhere at the same
-        // instant -- it's a wave running along the sheet, phased by
-        // each vertex's rest position, so different columns catch it
-        // at slightly different moments. That's the difference between
-        // "the fabric got shoved" and "the fabric is billowing": a
-        // uniform push moves the whole thing as one rigid card, a
-        // traveling wave makes ridges form and roll across it.
         const wavePos = p.restX * WIND_WAVE_FREQ + simTime * WIND_WAVE_SPEED;
         const wave = 0.5 + 0.5 * Math.sin(wavePos + p.seed * 0.4);
         const gust = windPower * WIND_GAIN * (1 - WIND_WAVE_DEPTH + WIND_WAVE_DEPTH * wave);
@@ -357,42 +269,8 @@
       p.x += vx + ax * dt * dt;
       p.y += vy + ay * dt * dt;
 
-      // Window bottom edge, converted from screen space back into the
-      // same nominal cloth space p.y lives in -- this is what "falls
-      // off the visible page" actually means now that the canvas is
-      // the whole window instead of a fixed box, so it stays correct
-      // through resizes and cloth-size changes without needing its
-      // own constant.
-      //
-      // This only exists to clean up torn-off burning fragments that
-      // have fallen well clear of view -- it's NOT supposed to catch
-      // ordinary cloth swinging on a pendulum. destroyed is permanent
-      // (linkIntact treats a destroyed particle as gone forever, on
-      // both the physics and the mesh side), so marking a perfectly
-      // healthy, unburned vertex destroyed just because a gust or the
-      // cloth's own momentum swung it a bit past the bottom edge meant
-      // it never came back once it swung back into view -- it read as
-      // a permanent bite taken out of the cloth, which is exactly the
-      // "chunk missing after it swings back" bug this was causing from
-      // the very start. CUT_THRESHOLD (not just "any burn at all") is
-      // the right line here -- that's the exact point linkIntact()
-      // already treats a vertex as cut loose from the mesh, so this
-      // only ever fires on something that's already a free, untethered
-      // scrap. A vertex that's lightly charred but still structurally
-      // part of the fabric is not a "fragment" yet and shouldn't be
-      // eligible either.
       const fallLimit = (VIEW_H - originY) / clothScale + 40;
       if (p.burn >= CUT_THRESHOLD && p.y > fallLimit) {
-        // No ash puff here on purpose -- by this point the fragment has
-        // already fallen well clear of the visible window (fallLimit is
-        // 40 cloth-units past VIEW_H), so it's not actually visible
-        // anymore. A puff used to fire anyway at a fixed spot near the
-        // cloth's own bottom edge (HEIGHT + 20) to "represent" it, but
-        // that put a small puff of smoke right where the hover frame's
-        // border sits, over and over, every time a scrap crossed this
-        // line -- reading as smoke stuck to the frame rather than
-        // anything to do with the actual cloth. Nothing is visibly
-        // lost by just letting it go quietly.
         p.destroyed = true;
       }
     }
@@ -423,15 +301,6 @@
     }
   }
 
-  // Right now cloth is either burning (and showing it) or completely
-  // untouched, with nothing in between -- a vertex two cells away from
-  // an active flame looks exactly as pristine as one on the far
-  // corner of the sheet, right up until the ignite-chain in stepCloth
-  // below actually reaches it. heatGlow is a cheap, approximate
-  // diffusion (not a real heat equation, just neighbor-averaging) that
-  // gives fabric a warm pre-char discoloration bleeding outward from
-  // wherever's actively burning, so a patch visibly warms before it
-  // catches instead of catching with no warning at all.
   const HEAT_SOURCE_GAIN = 1.0;  // How strongly an actively burning vertex radiates
   const HEAT_DIFFUSE = 0.5;      // How much of a neighbor's heat bleeds through per frame
   const HEAT_RESPONSE = 4.5;     // How fast a vertex's own glow chases its diffusion target
@@ -480,19 +349,8 @@
         const p = particles[idx(i, j)];
         if (p.destroyed || !p.burning) continue;
 
-        // Slowed down a bit (was 0.5 + rand*0.35) -- combined with the
-        // higher CUT_THRESHOLD above, this gives the char/fire-ring
-        // shading room to actually be seen instead of flashing by on
-        // the way to a hole.
         p.burn += dt * (0.36 + Math.random() * 0.26);
 
-        // linkIntact() cuts a vertex's constraints at CUT_THRESHOLD --
-        // that's the actual instant a hole opens in the mesh, well
-        // before this particle counts as fully "destroyed" below. This
-        // is the one moment worth marking permanently: everything
-        // after it is just the torn flap falling away, but the mark of
-        // it having burned through belongs on the backdrop, not on a
-        // piece of cloth that's about to be gone.
         if (!p.scorched && p.burn >= CUT_THRESHOLD) {
           p.scorched = true;
           stampScorch(p.x, p.y, (16 + Math.random() * 16) * fireScale(), 0.45 + Math.random() * 0.25);

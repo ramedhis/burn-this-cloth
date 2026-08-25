@@ -34,16 +34,6 @@
     </div>
   </div>
 
-  <!-- Canvas-size controls, previously living in the side panel above --
-       moved out into their own small draggable popup (opened from the
-       "Resize" button on the cloth's own toolbar, see clothToolbarLeft
-       below) so resizing is reachable right from the cloth itself
-       instead of a scroll/reach back to the side panel every time.
-       Same drag-by-header + close-button pattern as the main panel,
-       just a second lighter-weight instance of it (see panel.js).
-       Nothing about the controls themselves changed -- same IDs, same
-       classes -- so main.js's size-preset/apply wiring didn't need to
-       change at all, only where these elements physically live. -->
   <div class="resize-popup hidden" id="resizePopup">
     <div class="popup-head" id="resizePopupHead">
       <div class="popup-title">Resize</div>
@@ -75,21 +65,12 @@
 
       <!-- Thin rectangle traced around the cloth on hover, gapped off
            the cloth's real edges so it never reads as part of the
-           image itself. The toolbar is nested inside it so it can
-           anchor itself to the rectangle's own top edge in CSS
-           (see .cloth-toolbar) rather than needing its own JS math. -->
+           image itself. -->
       <div class="cloth-frame" id="clothFrame">
         <!-- Drag handles: thin strips along each edge of the frame,
              invisible like the frame itself, only clickable while
              .active (see .cloth-frame.active .cloth-edge-handle in
-             style.css). Grabbing one and moving the pointer drags the
-             whole cloth around; holding Shift first turns it into a
-             one-axis resize instead (script.js reads data-resize to
-             know which of WIDTH/HEIGHT that edge controls). Corner
-             squares below are resize-only, both axes at once, and only
-             turn clickable while Shift is actually held. Either way
-             script.js clamps the result so the cloth can't leave the
-             safe-area box. -->
+             style.css). -->
         <div class="cloth-resize-handle cloth-edge-handle edge-top" data-resize="top"></div>
         <div class="cloth-resize-handle cloth-edge-handle edge-bottom" data-resize="bottom"></div>
         <div class="cloth-resize-handle cloth-edge-handle edge-left" data-resize="left"></div>
@@ -99,13 +80,6 @@
         <div class="cloth-resize-handle cloth-corner-handle corner-bl" data-resize="bottom left"></div>
         <div class="cloth-resize-handle cloth-corner-handle corner-br" data-resize="bottom right"></div>
 
-        <!-- Two separate groups instead of one centered toolbar, each
-             pinned to line up with the cloth's own edge rather than
-             the frame's (the frame is FRAME_GAP px wider on every
-             side -- see positionClothFrame() in script.js -- so
-             "left:0" here would line up with the frame, not the
-             cloth). .cloth-toolbar-left/-right in style.css offset by
-             that same FRAME_GAP to correct for it. -->
         <div class="cloth-toolbar cloth-toolbar-left" id="clothToolbarLeft">
           <label class="cloth-tool-btn file-btn" id="loadImageBtn" title="Load image">
             Load
@@ -123,17 +97,6 @@
     </div>
   </div>
 
-  <!--
-    Loaded in this exact order on purpose: these used to be one big file
-    (script.js), split into files grouped by concern. They're plain
-    classic scripts, not modules -- each one's top-level let/const/function
-    declarations join the same shared global scope, so viewport.js's WIDTH
-    is visible to cloth-physics.js, cloth-physics.js's particles array is
-    visible to fire.js, and so on, in exactly the same way they could
-    already see each other back when it was all one file. That sharing is
-    exactly why the load order below has to match: a file can only use
-    what an earlier file already declared.
-  -->
   <script src="js/panel.js"></script>
   <script src="js/viewport.js"></script>
   <script src="js/pixi-stage.js"></script>

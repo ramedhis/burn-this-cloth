@@ -1,13 +1,4 @@
 // === interaction.js ===
-// Part of the burn-this-cloth engine. Loaded as a plain <script> (not a
-// module) in index.html, in the same order these sections used to appear
-// inside the single big IIFE in the old script.js. All the let/const/function
-// declarations below live at the top level of the page's shared script scope
-// (that's just how classic, non-module <script> tags work -- each one's
-// top-level declarations join one common global scope), so a name declared in
-// an earlier-loaded file is already available here, and a name declared here is
-// available to any file loaded after it -- no window.* namespace object, no
-// imports, nothing to wire up by hand.
 
   // Input
   function getPos(e) {
@@ -43,23 +34,7 @@
     e.preventDefault();
   }, { passive: false });
 
-  // Hover hit-test for the frame/toolbar overlay. Deliberately its own
-  // window-level listener rather than piggybacking on the canvas one
-  // above: once the toolbar is visible and the cursor moves onto one
-  // of its buttons, the canvas stops being the topmost element there
-  // and would otherwise fire mouseleave right as someone reaches for a
-  // button. A window listener keeps tracking clientX/Y regardless of
-  // which element is actually under the cursor.
-  //
-  // Two different boxes, on purpose: the frame should only ever switch
-  // ON because the cursor is over the actual cloth -- hovering the
-  // gap by itself shouldn't summon it. But once it's up, the cursor
-  // has to cross that same gap to reach the toolbar sitting above it,
-  // so switching OFF the instant the cursor leaves the strict cloth
-  // box would make the buttons unreachable. So: entering the strict
-  // box turns it on; leaving the padded box turns it off; anywhere in
-  // between (the gap, or the toolbar itself) just leaves it however it
-  // already was.
+  // Hover hit-test for the frame/toolbar overlay.
   const FRAME_HOVER_PAD = 16;      // matches FRAME_GAP, left/right/bottom slack
   const FRAME_HOVER_TOP_PAD = 56;  // extra headroom so the toolbar itself counts
   window.addEventListener('mousemove', (e) => {
@@ -84,9 +59,7 @@
 
   function ignite(pos, opts) {
     // strength scales down both the catch radius and how much burn a
-    // touch actually deposits -- used to make a held drag lay down a
-    // trail of light touches (like dragging a lit match) instead of
-    // spamming full click-strength bursts dozens of times a second.
+    // touch actually deposits.
     const strength = (opts && opts.strength != null) ? opts.strength : 1;
 
     // Roll a random patch size per click -- sometimes it's a small
@@ -122,13 +95,7 @@
       }
       // "Grazed the cloth" only counts if the nearest particle is
       // still roughly within the same reach as the ignite radius
-      // itself -- generous enough to cover a coarse grid's spacing
-      // gaps, not a license to torch the fabric from clear across the
-      // page. Without this cap, a click anywhere at all -- even one
-      // that landed nowhere near the cloth -- would still set fire to
-      // whatever particle happened to be nearest, no matter how far
-      // away that actually was. Same as expecting a match lit a
-      // kilometer from a piece of paper to somehow set it alight.
+      // itself.
       const fallbackMaxDistSq = (radius * 1.5) ** 2;
       if (best && bestD <= fallbackMaxDistSq) {
         hitAny = true;
@@ -137,19 +104,6 @@
       }
     }
 
-    // Missed the cloth entirely -- no particle actually caught, but the
-    // click itself still throws its usual flame burst below regardless
-    // (a flick of fire lands wherever you click; whether the fabric
-    // itself was close enough to catch is a separate question, handled
-    // entirely by the distance cap above).
-
-    // The sprite burst land -- separate roll from the cloth-patch
-    // radius above, so a click can catch a wide patch of cloth but
-    // still only throw out one big flame, or the other way around.
-    // sizeMul below is additionally scaled by strength so a dragged
-    // touch throws small licks instead of full click-sized tongues --
-    // matters most at strength<1, where this fires many times a
-    // second as you drag.
     const roll = Math.random();
     if (roll < 0.3) {
       // One flame, but a proper tall one
@@ -172,10 +126,7 @@
   // Custom anchors: shift-click nails the nearest grid particle in
   // place exactly where it's currently hanging (not back to its flat
   // rest position -- see the pinX/pinY comment in buildGrid). Shift-
-  // clicking an already-pinned particle un-nails it instead. Snap
-  // radius is derived from the current grid spacing rather than a
-  // fixed pixel number, so a coarse grid and a fine one both feel
-  // equally easy to click a vertex on.
+  // clicking an already-pinned particle un-nails it instead.
   function anchorSnapRadiusSq() {
     const spx = WIDTH / COLS, spy = HEIGHT / ROWS;
     return (Math.max(spx, spy) * 0.75) ** 2;
@@ -208,10 +159,7 @@
   // Hover preview: while Shift is held, whichever existing anchor is
   // under the cursor lights up (see drawAnchors in mesh-render.js) so
   // it's clear a click will remove that specific point rather than
-  // planting a new one somewhere nearby. Recomputed once a frame in the
-  // main loop (updateAnchorHover) rather than only on mousemove, so it
-  // also reacts the instant Shift itself is pressed or released without
-  // needing the mouse to move first.
+  // planting a new one somewhere nearby.
   let hoveredAnchor = null;
 
   function updateAnchorHover() {
@@ -227,11 +175,7 @@
   // cloth's four boundary lines, hold still there for a moment, and
   // the whole line lights up (drawEdgeHighlight in mesh-render.js),
   // previewing what a click is about to do to every point along it.
-  // Works the same way in both directions -- hovering an un-anchored
-  // stretch previews pinning it, hovering an already-anchored stretch
-  // previews un-pinning it -- edgeHoverMode below is just which of
-  // those two the currently-hovered point calls for, so the click
-  // handler knows which one to actually do.
+  // Works the same way in both directions.
   const EDGE_HOVER_DWELL = 1; // seconds of continuous hover before it lights up
   let hoveredEdge = null;
   let edgeHoverMode = null; // 'pin' | 'unpin'
@@ -256,11 +200,6 @@
 
     const mode = best.pinned ? 'unpin' : 'pin';
     if (edge !== hoveredEdge || mode !== edgeHoverMode) {
-      // Landed on a different edge, or the same edge but the point
-      // under the cursor flipped from anchored to un-anchored (or vice
-      // versa) -- either way that's a different action than whatever
-      // was being dwelled on before, so the wait starts over rather
-      // than carrying leftover time across into it.
       hoveredEdge = edge;
       edgeHoverMode = mode;
       edgeHoverTimer = 0;
@@ -270,13 +209,6 @@
     if (edgeHoverTimer >= EDGE_HOVER_DWELL) edgeHighlightActive = true;
   }
 
-  // Pins every still-intact, not-yet-anchored particle along one
-  // boundary line, each nailed at wherever it's actually hanging right
-  // now -- same "anchor in place" semantics toggleAnchorAt already
-  // uses for a single point, just applied to the whole line at once.
-  // Already-pinned points on that same line are left alone rather than
-  // re-pinned, so this is safe to fire on a partially-anchored edge
-  // without disturbing anchors someone placed earlier by hand.
   function pinEdge(edge) {
     for (const i of edgeParticleIndices(edge)) {
       const p = particles[i];
@@ -287,10 +219,6 @@
     }
   }
 
-  // The reverse: un-pins every currently-anchored particle along one
-  // boundary line, leaving anything already loose on that line alone.
-  // Whatever falls now falls from wherever it was actually held, same
-  // as removing any other anchor.
   function unpinEdge(edge) {
     for (const i of edgeParticleIndices(edge)) {
       const p = particles[i];
@@ -316,12 +244,6 @@
     // Shift turns a click into an anchor action instead of an ignite --
     // same modifier key the cloth-frame resize handles use, but this is
     // on the canvas itself so the two never fire on the same click.
-    // A dwelled edge highlight takes priority over the plain single-
-    // point toggle below: once the line has actually lit up, that's
-    // what the click is understood to be aimed at, not just whichever
-    // one grid point happens to be nearest the cursor. Which of the
-    // two things it does (pin the line or clear it) is whatever
-    // edgeHoverMode settled on while dwelling -- see updateEdgeHover.
     if (e.shiftKey) {
       if (edgeHighlightActive && hoveredEdge) {
         if (edgeHoverMode === 'unpin') unpinEdge(hoveredEdge);
@@ -348,9 +270,7 @@
   canvas.addEventListener('touchcancel', () => { pointerDown = false; });
 
   // Load and Remove occupy the same slot in the toolbar rather than
-  // both sitting there permanently -- Remove is meaningless with no
-  // image loaded, and Load is redundant once one's already in. This
-  // just flips which one has the .hidden class based on sourceImage.
+  // both sitting there permanently.
   const loadImageBtn = document.getElementById('loadImageBtn');
   const removeImageBtnEl = document.getElementById('removeImageBtn');
   function updateImageToolButtons() {
@@ -372,11 +292,6 @@
       resetCloth(false);
       URL.revokeObjectURL(url);
       updateImageToolButtons();
-      // Loading a new picture is the opposite of "start completely
-      // over" -- they're actively continuing with fresh content, so a
-      // later Reset State shouldn't also yank the size out from under
-      // them just because Remove happened to be clicked at some earlier
-      // point in the session.
       pendingFactoryReset = false;
     };
     img.src = url;
@@ -390,22 +305,9 @@
     updateImageToolButtons();
   });
 
-  // Captured once, right here as this file first runs -- by this point
-  // viewport.js/cloth-physics.js have already set WIDTH/HEIGHT to
-  // whatever the real page-load size is, so this is genuinely "factory
-  // default," not just whatever the cloth's size happens to be right
-  // now. Used below by the Remove-then-Reset combo, since that's the
-  // one path that needs to get back to it.
   const DEFAULT_WIDTH = WIDTH;
   const DEFAULT_HEIGHT = HEIGHT;
 
-  // Armed the instant Remove is clicked, consumed by the very next
-  // Reset State click and nothing else. That specific combination --
-  // not either button alone -- is what reads as "start completely
-  // over": Remove by itself just clears the picture (Reset afterward
-  // still finds sourceImage cleared and falls back to the placeholder,
-  // but at whatever size the cloth already was), while this flag is
-  // what additionally pulls the *size* back to default too.
   let pendingFactoryReset = false;
 
   document.getElementById('resetBtn').addEventListener('click', () => {
@@ -426,26 +328,7 @@
     }
   });
 
-  // Close lives on the cloth's own toolbar and does exactly what it
-  // says: deletes the cloth entity outright, on demand, rather than
-  // waiting for it to burn all the way through. Marking every particle
-  // destroyed is enough on its own for rendering (destroyed particles
-  // already skip drawing everywhere), but the flame/ember/smoke/ash
-  // arrays are independent objects once spawned -- they don't hold a
-  // reference back to the particle that lit them -- so without
-  // clearing them too you'd get fire hanging in mid-air over a cloth
-  // that no longer exists.
-  //
-  // Also clears sourceImage, same as hitting Unload -- this is what
-  // makes Reset State's behavior depend on *why* there's nothing on
-  // screen. Burning/tearing all the way through never touches
-  // sourceImage, so Reset afterward still finds it set and reloads the
-  // same picture: same cloth, back intact. Clicking Remove is a
-  // deliberate "start over" instead, so it wipes sourceImage too --
-  // Reset afterward finds nothing set and falls back to the plain
-  // placeholder, same as a fresh page load. Arming pendingFactoryReset
-  // here is that same idea taken one step further: Remove-then-Reset
-  // also pulls the *size* back to default, not just the picture.
+  // Close lives on the cloth's own toolbar and does exactly what it says.
   document.getElementById('clothCloseBtn').addEventListener('click', () => {
     for (let n = 0; n < particles.length; n++) particles[n].destroyed = true;
     flames.length = 0;
@@ -459,15 +342,7 @@
   });
 
   // Dragging the cloth around by its frame -- or, holding Shift,
-  // resizing it instead. The frame rectangle itself stays
-  // pointer-events:none like before (so it never steals a click meant
-  // for the cloth underneath); what's actually grabbable is the four
-  // edge strips (.cloth-edge-handle, added earlier) plus four small
-  // corner squares (.cloth-corner-handle, HTML) sitting right on the
-  // frame's own corners. Edges do double duty -- move when Shift is up,
-  // resize just that one side when it's down -- corners are resize-only
-  // and only turn on (pointer-events) while Shift is actually held, via
-  // .cloth-frame.shift-armed in style.css.
+  // resizing it instead.
   const dragHandles = document.querySelectorAll('.cloth-resize-handle');
 
   let clothDragging = false;
@@ -476,10 +351,7 @@
 
   function beginClothDrag(clientX, clientY) {
     // isClothGone() also means there's nothing left for the frame to
-    // trace -- see the same check in the main loop below, which is
-    // what actually pulls .active off the frame once the cloth is
-    // gone. Belt-and-suspenders here in case a drag somehow starts in
-    // the one-frame gap before that check runs.
+    // trace.
     if (isClothGone()) return;
     clothDragging = true;
     dragStartClientX = clientX;
@@ -506,20 +378,9 @@
     document.body.classList.remove('cloth-dragging');
   }
 
-  // Resizing: dragging a side changes WIDTH and/or HEIGHT (the cloth's
-  // actual nominal size, same numbers the width/height fields and
-  // Apply button already control) rather than some separate on-screen
-  // zoom -- which is exactly why it can't get past the safe-area lines:
-  // applyCanvasSize()/updateViewport() always re-fits whatever size
-  // comes out of this to the biggest box that fits inside the safe
-  // area, same as typing a size in by hand always has.
-  //
-  // Rebuilding the cloth (resetCloth, inside applyCanvasSize) isn't
-  // free, so a live drag doesn't call it on every single mousemove --
-  // updateClothResize() just tracks where the pointer wants the size to
-  // be, and the main loop below actually applies it a few times a
-  // second (see RESIZE_APPLY_INTERVAL), the same throttle-a-continuous-
-  // gesture trick DRAG_IGNITE_INTERVAL already uses for the lit-match drag.
+  // Resizing: dragging a side changes WIDTH and/or HEIGHT rather than
+  // some separate on-screen zoom -- which is exactly why it can't get
+  // past the safe-area lines.
   const RESIZE_APPLY_INTERVAL = 0.05;
 
   let resizing = false;
@@ -561,14 +422,6 @@
     const hasTop = sides.includes('top'), hasBottom = sides.includes('bottom');
     const hasLeft = sides.includes('left'), hasRight = sides.includes('right');
 
-    // Anchor = the point that stays visually put while the grabbed
-    // side(s) follow the cursor, same idea as a Photoshop free-transform
-    // handle leaving the opposite corner planted. When an axis isn't
-    // part of this handle at all (e.g. the plain right-edge handle only
-    // touches width), there's no "opposite edge" to anchor to on that
-    // axis, so it anchors to the rect's own center instead -- otherwise
-    // a pure width-only drag would still visually creep up/down
-    // whenever the aspect-ratio change nudges the fitted height.
     resizeAnchorScreenX = hasRight ? clothRectLeft : hasLeft ? clothRectRight : (clothRectLeft + clothRectRight) / 2;
     resizeAnchorScreenY = hasBottom ? clothRectTop : hasTop ? clothRectBottom : (clothRectTop + clothRectBottom) / 2;
 
@@ -630,17 +483,9 @@
     resizing = false;
     if (resizeCursorClass) document.body.classList.remove(resizeCursorClass);
     resizeCursorClass = '';
-    applyPendingResize(); // land on exactly where the cursor let go, not wherever the last throttled tick was
+    applyPendingResize();
   }
 
-  // Shift-armed state drives two things in style.css now: corner
-  // handles turning clickable, and edge handles swapping their cursor
-  // from "move" to a resize cursor. It used to also gate the toolbar's
-  // hidden state, but only in combination with hovering a resize
-  // handle specifically -- that got widened to "hide any time Shift is
-  // held at all" (see .cloth-frame.shift-armed .cloth-toolbar in
-  // style.css), which plain shift-armed already covers on its own, so
-  // there's no separate hover-tracked class needed for it anymore.
   let shiftHeld = false;
 
   function refreshShiftModeUI() {
@@ -666,9 +511,6 @@
       if (e.shiftKey && sides) {
         beginClothResize(sides, e.clientX, e.clientY);
       } else if (handle.classList.contains('cloth-edge-handle')) {
-        // Corner handles have no move behavior of their own -- they only
-        // ever turn clickable in the first place while shift-armed (see
-        // style.css), so this branch is unreachable for them in practice.
         beginClothDrag(e.clientX, e.clientY);
       }
       e.preventDefault();

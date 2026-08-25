@@ -1,6 +1,7 @@
 // === panel.js ===
 // The floating side panel, and the smaller resize popup below it: both
 // are just dragging + show/hide, same pattern, two independent instances.
+
 (function () {
   const panel = document.getElementById('panel');
   const head = document.getElementById('panelHead');
@@ -46,10 +47,7 @@
 })();
 
 // Resize popup: the same drag-by-header + close-button behavior as the
-// main panel above, just a second, independent instance of it -- kept
-// in its own IIFE rather than folded into the one above so its state
-// (rDragging, offsets) can't collide with the main panel's, since the
-// two can be dragged around independently of each other.
+// main panel above, just a second, independent instance of it.
 (function () {
   const popup = document.getElementById('resizePopup');
   const head = document.getElementById('resizePopupHead');
@@ -84,10 +82,7 @@
     popup.classList.add('hidden');
   });
 
-  // The toolbar button toggles rather than just opening -- clicking
-  // "Resize" again while the popup's already up closes it, same as
-  // hitting the close button, instead of leaving it stuck open with
-  // no obvious way back except hunting for the small &times; button.
+  // The toolbar button toggles rather than just opening.
   toolBtn.addEventListener('click', () => {
     popup.classList.toggle('hidden');
   });

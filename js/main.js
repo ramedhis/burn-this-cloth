@@ -1,28 +1,12 @@
 // === main.js ===
-// Part of the burn-this-cloth engine. Loaded as a plain <script> (not a
-// module) in index.html, in the same order these sections used to appear
-// inside the single big IIFE in the old script.js. All the let/const/function
-// declarations below live at the top level of the page's shared script scope
-// (that's just how classic, non-module <script> tags work -- each one's
-// top-level declarations join one common global scope), so a name declared in
-// an earlier-loaded file is already available here, and a name declared here is
-// available to any file loaded after it -- no window.* namespace object, no
-// imports, nothing to wire up by hand.
 
   document.getElementById('densityBtn').addEventListener('click', () => {
-    // Button label stays put ("Density") regardless of which setting is
-    // active -- it's a cycle button living in a small toolbar now, not
-    // a status readout, so there's no room (or need) to spell out the
-    // current value on the button itself.
     densityIdx = (densityIdx + 1) % densities.length;
     resetCloth(true);
   });
 
   const gridToggleBtn = document.getElementById('gridToggleBtn');
   gridToggleBtn.addEventListener('click', () => {
-    // Same deal as densityBtn above -- label just says "Mesh" always,
-    // the is-on class (already styled in CSS) is what shows whether
-    // it's currently active.
     showGrid = !showGrid;
     gridToggleBtn.classList.toggle('is-on', showGrid);
   });
@@ -79,11 +63,8 @@
       }
     }
 
-    // Same throttle-by-time idea as the drag-ignite trail above, just
-    // applied to an in-progress resize: updateClothResize() (called
-    // from the mousemove listener) only ever records where the pointer
-    // wants the size to be, this is what actually rebuilds the cloth to
-    // match, a handful of times a second rather than every mousemove.
+    // updateClothResize() (called from the mousemove listener) only ever
+    // records where the pointer wants the size to be.
     if (resizing) {
       resizeApplyTimer -= dt;
       if (resizeApplyTimer <= 0) {
