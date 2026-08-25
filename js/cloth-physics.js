@@ -128,7 +128,7 @@
     resetScorchLayer();
     if (!keepTexture) {
       if (sourceImage) loadImageCover(sourceImage);
-      else drawPlaceholderTexture();
+      else drawFlagPlaceholder(); // grey/X is reserved for the Unload button now
     }
     refreshClothTexture();
     buildMeshObjects();

@@ -42,7 +42,7 @@
 
   // Main loop:
   updateViewport();
-  drawPlaceholderTexture();
+  regenerateFlagPlaceholder();
   resetCloth(true);
   updateImageToolButtons();
 

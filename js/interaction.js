@@ -305,6 +305,15 @@
     updateImageToolButtons();
   });
 
+  document.getElementById('randomBtn').addEventListener('click', () => {
+    // Same idea as Unload -- just swaps the texture -- but rolls a
+    // fresh flag pattern instead of falling back to the grey/X.
+    sourceImage = null;
+    regenerateFlagPlaceholder();
+    refreshImageOnly();
+    updateImageToolButtons();
+  });
+
   const DEFAULT_WIDTH = WIDTH;
   const DEFAULT_HEIGHT = HEIGHT;
 
