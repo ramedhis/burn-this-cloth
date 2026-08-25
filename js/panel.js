@@ -7,6 +7,20 @@
   const head = document.getElementById('panelHead');
   const closeBtn = document.getElementById('panelClose');
   const menuToggle = document.getElementById('menuToggle');
+  const hintBtn = document.getElementById('hintBtn');
+  const hintReturnBtn = document.getElementById('hintReturnBtn');
+  const defaultView = document.getElementById('panelDefaultView');
+  const hintView = document.getElementById('panelHintView');
+
+  hintBtn.addEventListener('click', () => {
+    defaultView.classList.add('hidden');
+    hintView.classList.remove('hidden');
+  });
+
+  hintReturnBtn.addEventListener('click', () => {
+    hintView.classList.add('hidden');
+    defaultView.classList.remove('hidden');
+  });
 
   let dragging = false;
   let offX = 0, offY = 0;
@@ -38,6 +52,8 @@
   closeBtn.addEventListener('click', () => {
     panel.classList.add('hidden');
     menuToggle.classList.remove('hidden');
+    hintView.classList.add('hidden');
+    defaultView.classList.remove('hidden');
   });
 
   menuToggle.addEventListener('click', () => {

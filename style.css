@@ -110,11 +110,26 @@
   .panel-close:hover { border-color: var(--ink); color: var(--ink); }
 
   .panel-body { padding: 16px; }
+  .panel-view.hidden { display: none; }
 
   .panel-hint {
     font-size: 11.5px; line-height: 1.6; color: var(--ink-dim);
     margin: 0 0 18px;
   }
+
+  .hint-title {
+    margin: 0 0 10px;
+    color: var(--ink);
+    letter-spacing: 0.04em;
+  }
+
+  .hint-list {
+    margin: 0;
+    padding-left: 16px;
+    list-style-type: square;
+  }
+
+  .hint-list li + li { margin-top: 8px; }
 
   .panel-row { display: flex; flex-wrap: wrap; gap: 8px; }
   .panel-row + .panel-row { margin-top: 8px; }

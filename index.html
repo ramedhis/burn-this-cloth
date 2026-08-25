@@ -22,14 +22,32 @@
       <button class="panel-close" id="panelClose" title="hide">&times;</button>
     </div>
     <div class="panel-body">
-      <div class="panel-hint">
-        Hover anywhere on the image to push the cloth. Click a spot to set it on fire.
-        Shift+click a point on the cloth to nail an anchor there, or shift+click
-        an existing anchor to remove it. Hover the cloth's own frame for quick
-        tools -- load/remove image, density, mesh, resize.
+      <div class="panel-view" id="panelDefaultView">
+        <div class="panel-hint">
+          A cloth-burning interactive simulation web toy.
+        </div>
+        <div class="panel-row">
+          <button id="hintBtn">Hint?</button>
+        </div>
+        <div class="panel-row">
+          <button id="resetBtn">Reset State</button>
+        </div>
       </div>
-      <div class="panel-row">
-        <button id="resetBtn">Reset State</button>
+      <div class="panel-view hidden" id="panelHintView">
+        <div class="panel-hint">
+          <p class="hint-title">OK, SO WHAT CAN YOU DO?</p>
+          <ul class="hint-list">
+            <li>Hover anywhere near the cloth to push it. Hold Shift while hovering to disable this.</li>
+            <li>Click a spot to set it on fire. Click and drag to trail fire across the cloth.</li>
+            <li>Hover the cloth to reveal its frame and quick tools. Hold Shift while hovering to hide them.</li>
+            <li>Click and drag a frame edge to move the cloth. Hold Shift while dragging to resize instead (works on corners too).</li>
+            <li>Shift+click a point on the cloth to nail an anchor there, or shift+click an existing anchor to remove it.</li>
+            <li>Hold Shift and hover an edge of the cloth for about a second to highlight it, then click to anchor or unanchor the whole edge.</li>
+          </ul>
+        </div>
+        <div class="panel-row">
+          <button id="hintReturnBtn">Return</button>
+        </div>
       </div>
     </div>
   </div>
