@@ -16,8 +16,8 @@
 
   // How much of the window the cloth's fitted size is allowed to fill
   // -- the leftover is the safe-area gap around it.
-  const SAFE_AREA_W_FRAC = 0.92;
-  const SAFE_AREA_H_FRAC = 0.88;
+  const SAFE_AREA_W_FRAC = 0.90; // Previous version: 0.92
+  const SAFE_AREA_H_FRAC = 0.83; // Previous version: 0.88
 
   // clothScale: how many real screen pixels one WIDTH/HEIGHT-space
   // unit maps to. originX/originY: where the cloth's own (0,0) lands
