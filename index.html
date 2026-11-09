@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>burn-this-cloth</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/pixi.js@7.4.2/dist/pixi.min.js"></script>
+</head>
+<body>
+  <button class="menu-toggle hidden" id="menuToggle" title="show menu">
+    <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M2 4H14M2 8H14M2 12H14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
+  </button>
+
+  <div class="panel" id="panel">
+    <div class="panel-head" id="panelHead">
+      <div class="panel-title">burn<span>-this-</span>cloth</div>
+      <button class="panel-close" id="panelClose" title="hide">&times;</button>
+    </div>
+    <div class="panel-body">
+      <div class="panel-view" id="panelDefaultView">
+        <div class="panel-hint">
+          A cloth-burning interactive simulation web toy.
+        </div>
+        <div class="panel-row">
+          <button id="hintBtn">Hint?</button>
+        </div>
+        <div class="panel-row">
+          <button id="resetBtn">Reset State</button>
+        </div>
+      </div>
+      <div class="panel-view hidden" id="panelHintView">
+        <div class="panel-hint">
+          <p class="hint-title">OK, SO WHAT CAN YOU DO?</p>
+          <ul class="hint-list">
+            <li>Hover anywhere near the cloth to push it. Hold Shift while hovering to disable this.</li>
+            <li>Click a spot to set it on fire. Click and drag to trail fire across the cloth.</li>
+            <li>Hover the cloth to reveal its frame and quick tools. Hold Shift while hovering to hide.</li>
+            <li>Click and drag a frame edge to move the cloth. Hold Shift while dragging to resize instead (works on corners too).</li>
+            <li>Shift+click a point on the cloth to nail an anchor there, or shift+click an existing anchor to remove it.</li>
+            <li>Hold Shift and hover an edge of the cloth for ~1s to highlight it, then click to anchor or unanchor the whole edge.</li>
+          </ul>
+        </div>
+        <div class="panel-row">
+          <button id="hintReturnBtn">Return</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="resize-popup hidden" id="resizePopup">
+    <div class="popup-head" id="resizePopupHead">
+      <div class="popup-title">Resize</div>
+      <button class="popup-close" id="resizePopupClose" title="close">&times;</button>
+    </div>
+    <div class="popup-body">
+      <div class="panel-label">Canvas size</div>
+      <div class="preset-group" id="presetRow">
+        <button type="button" class="preset-btn" data-preset="square">1:1</button>
+        <button type="button" class="preset-btn" data-preset="portrait">4:5</button>
+        <button type="button" class="preset-btn" data-preset="story">9:16</button>
+      </div>
+
+      <div class="panel-label">Custom size</div>
+      <div class="size-note">Capped at 4K per side</div>
+      <div class="panel-row">
+        <div class="field-pair">
+          <input type="number" id="widthInput" placeholder="W" min="1" step="1" />
+          <input type="number" id="heightInput" placeholder="H" min="1" step="1" />
+          <button type="button" id="applySizeBtn">Apply</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage-wrap">
+    <div class="stage">
+      <canvas id="c"></canvas>
+
+      <!-- Thin rectangle traced around the cloth on hover, gapped off
+           the cloth's real edges so it never reads as part of the
+           image itself. -->
+      <div class="cloth-frame" id="clothFrame">
+        <!-- Drag handles: thin strips along each edge of the frame,
+             invisible like the frame itself, only clickable while
+             .active (see .cloth-frame.active .cloth-edge-handle in
+             style.css). -->
+        <div class="cloth-resize-handle cloth-edge-handle edge-top" data-resize="top"></div>
+        <div class="cloth-resize-handle cloth-edge-handle edge-bottom" data-resize="bottom"></div>
+        <div class="cloth-resize-handle cloth-edge-handle edge-left" data-resize="left"></div>
+        <div class="cloth-resize-handle cloth-edge-handle edge-right" data-resize="right"></div>
+        <div class="cloth-resize-handle cloth-corner-handle corner-tl" data-resize="top left"></div>
+        <div class="cloth-resize-handle cloth-corner-handle corner-tr" data-resize="top right"></div>
+        <div class="cloth-resize-handle cloth-corner-handle corner-bl" data-resize="bottom left"></div>
+        <div class="cloth-resize-handle cloth-corner-handle corner-br" data-resize="bottom right"></div>
+
+        <div class="cloth-toolbar cloth-toolbar-left" id="clothToolbarLeft">
+          <label class="cloth-tool-btn file-btn" id="loadImageBtn" title="Load image">
+            Load
+            <input type="file" id="fileInput" accept="image/*" />
+          </label>
+          <button type="button" id="removeImageBtn" class="cloth-tool-btn" title="Unload image">Unload</button>
+          <button type="button" id="randomBtn" class="cloth-tool-btn" title="Random pattern">Random</button>
+          <button type="button" id="densityBtn" class="cloth-tool-btn">Density</button>
+          <button type="button" id="gridToggleBtn" class="cloth-tool-btn">Mesh</button>
+          <button type="button" id="resizeToolBtn" class="cloth-tool-btn">Resize</button>
+        </div>
+        <div class="cloth-toolbar cloth-toolbar-right" id="clothToolbarRight">
+          <button type="button" id="clothCloseBtn" class="cloth-tool-btn cloth-close-btn" title="Remove cloth">Remove</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/panel.js"></script>
+  <script src="js/viewport.js"></script>
+  <script src="js/pixi-stage.js"></script>
+  <script src="js/texture.js"></script>
+  <script src="js/flag-placeholder.js"></script>
+  <script src="js/cloth-physics.js"></script>
+  <script src="js/mesh-render.js"></script>
+  <script src="js/fire.js"></script>
+  <script src="js/interaction.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

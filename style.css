@@ -1,0 +1,442 @@
+  :root{
+    --bg: #000000;
+    --panel: #0c0c0c;
+    --line: #2b2b2b;
+    --ink: #f0f0ee;
+    --ink-dim: #8a8a86;
+    --wash: #161616;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    overflow: hidden;
+  }
+
+  /* Full-bleed. */
+  .stage-wrap {
+    height: 100%;
+  }
+  .stage {
+    position: relative;
+    width: 100%; height: 100%;
+    background: #000000;
+    touch-action: none;
+    cursor: crosshair;
+  }
+  canvas {
+    display: block;
+    width: 100%; height: 100%;
+  }
+
+  .menu-toggle {
+    position: fixed;
+    top: 18px; left: 18px;
+    z-index: 20;
+    width: 38px; height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    appearance: none;
+    background: var(--panel);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    cursor: pointer;
+    transition: border-color 0.1s ease, color 0.1s ease;
+  }
+
+  .menu-toggle:hover { border-color: var(--ink); color: var(--ink); }
+  .menu-toggle.hidden { display:none; }
+  .menu-toggle svg {
+    width: 16px;
+    height: 16px;
+    display: block;
+  }
+
+  /* The floating control panel itself */
+  .panel {
+    position: fixed;
+    top: 18px; left: 18px; z-index: 10;
+    width: 270px; max-width: 80vw;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    overflow: hidden;
+  }
+
+  .panel.hidden { display:none; }
+
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 10px 12px 16px;
+    background: var(--wash);
+    border-bottom: 1px solid var(--line);
+    cursor: grab;
+    user-select:none;
+  }
+
+  .panel-head:active { cursor:grabbing; }
+
+  .panel-title {
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink);
+  }
+
+  .panel-title span{ color: #d1453d; }
+  .panel-close {
+    appearance: none;
+    background: var(--panel);
+    color: var(--ink-dim);
+    border: 1px solid var(--line);
+    width: 24px; height: 24px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    transition: border-color 0.1s ease, color 0.1s ease;
+  }
+
+  .panel-close:hover { border-color: var(--ink); color: var(--ink); }
+
+  .panel-body { padding: 16px; }
+  .panel-view.hidden { display: none; }
+
+  .panel-hint {
+    font-size: 11.5px; line-height: 1.6; color: var(--ink-dim);
+    margin: 0 0 18px;
+  }
+
+  .hint-title {
+    margin: 0 0 10px;
+    color: var(--ink);
+    letter-spacing: 0.04em;
+  }
+
+  .hint-list {
+    margin: 0;
+    padding-left: 16px;
+    list-style-type: square;
+  }
+
+  .hint-list li + li { margin-top: 8px; }
+
+  .panel-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .panel-row + .panel-row { margin-top: 8px; }
+  .panel-label {
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    margin: 18px 0 8px;
+  }
+
+  .panel-body .panel-label:first-child { margin-top:0; }
+
+  .size-note {
+    font-size: 10.5px;
+    color: var(--ink-dim);
+    margin: -4px 0 8px;
+  }
+
+  .preset-group {
+    display: flex;
+    border: 1px solid var(--line);
+    overflow: hidden;
+  }
+
+  .preset-btn {
+    flex: 1 1 0;
+    border: none;
+    border-right: 1px solid var(--line);
+  }
+
+  .preset-btn:last-child { border-right: none; }
+  .preset-btn.active { background: var(--ink); color: #000; }
+
+  .field-pair { display: flex; gap: 8px; }
+
+  input[type=number] {
+    appearance: none;
+    -moz-appearance: textfield;
+    background: var(--panel);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    padding: 9px 10px;
+    font-family: inherit; font-size: 12px;
+    width: 100%;
+    flex: 1 1 0;
+  }
+
+  /* Kill the up/down steppers -- at 4 digits they were chewing up
+     enough of the field width that "4000" read like "400" */
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  input[type=number]:focus {
+    outline: none;
+    border-color: var(--ink);
+  }
+
+  input[type=number]::placeholder {
+    color: var(--ink-dim);
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+  }
+
+  button, .file-btn {
+    appearance: none;
+    background: var(--panel);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    padding: 9px 12px;
+    font-family: inherit;
+    font-size: 11.5px;
+    letter-spacing: 0.03em;
+    cursor: pointer;
+    text-transform: uppercase;
+    flex: 1 1 auto;
+    text-align: center;
+    transition: border-color 0.1s ease, color 0.1s ease, background-color 0.1s ease;
+  }
+
+  button:hover, .file-btn:hover {
+    border-color: var(--ink);
+    color: var(--ink);
+    background: var(--wash);
+  }
+
+  #gridToggleBtn.is-on {
+    background: var(--ink);
+    color: #000;
+    border-color: var(--ink);
+  }
+
+  #resetBtn {
+    border-color: #d1453d;
+    color: #d1453d;
+  }
+
+  #resetBtn:hover {
+    background: #d1453d;
+    color: #000;
+    border-color: #d1453d;
+  }
+
+  input[type=file] { display: none; }
+
+  .cloth-frame {
+    position: absolute;
+    z-index: 2;
+    border: 1px solid var(--line);
+    box-sizing: border-box;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+
+  .cloth-frame.active { opacity: 1; }
+
+  .cloth-edge-handle {
+    position: absolute;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .cloth-frame.active .cloth-edge-handle {
+    pointer-events: auto;
+    cursor: move;
+  }
+
+  .cloth-edge-handle.edge-top,
+  .cloth-edge-handle.edge-bottom {
+    left: 0; right: 0;
+    height: 12px;
+  }
+  .cloth-edge-handle.edge-top { top: -6px; }
+  .cloth-edge-handle.edge-bottom { bottom: -6px; }
+
+  .cloth-edge-handle.edge-left,
+  .cloth-edge-handle.edge-right {
+    top: 0; bottom: 0;
+    width: 12px;
+  }
+  .cloth-edge-handle.edge-left { left: -6px; }
+  .cloth-edge-handle.edge-right { right: -6px; }
+
+  /* Shift turns the four edges from move handles into resize handles --
+     same elements, just a different cursor and a different mousedown
+     branch in script.js (which checks e.shiftKey). */
+  .cloth-frame.shift-armed .cloth-edge-handle.edge-top,
+  .cloth-frame.shift-armed .cloth-edge-handle.edge-bottom {
+    cursor: ns-resize;
+  }
+  .cloth-frame.shift-armed .cloth-edge-handle.edge-left,
+  .cloth-frame.shift-armed .cloth-edge-handle.edge-right {
+    cursor: ew-resize;
+  }
+
+  .cloth-corner-handle {
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  .cloth-frame.active.shift-armed .cloth-corner-handle {
+    pointer-events: auto;
+  }
+
+  .cloth-corner-handle.corner-tl { top: -8px; left: -8px; cursor: nwse-resize; }
+  .cloth-corner-handle.corner-br { bottom: -8px; right: -8px; cursor: nwse-resize; }
+  .cloth-corner-handle.corner-tr { top: -8px; right: -8px; cursor: nesw-resize; }
+  .cloth-corner-handle.corner-bl { bottom: -8px; left: -8px; cursor: nesw-resize; }
+
+  .cloth-toolbar {
+    position: absolute;
+    top: 0;
+    transform: translateY(-50%);
+    display: flex;
+    gap: 6px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+  }
+
+  .cloth-toolbar-left { left: 16px; }
+  .cloth-toolbar-right { right: 16px; }
+
+  .cloth-frame.active .cloth-toolbar {
+    opacity: 1;
+    pointer-events: auto;
+    z-index: 2; /* above .cloth-edge-handle, so the top strip never steals a click meant for these buttons */
+  }
+
+  .cloth-frame.shift-armed .cloth-toolbar {
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+
+  body.cloth-dragging,
+  body.cloth-dragging *,
+  body.cloth-resizing-ns,
+  body.cloth-resizing-ns *,
+  body.cloth-resizing-ew,
+  body.cloth-resizing-ew *,
+  body.cloth-resizing-nwse,
+  body.cloth-resizing-nwse *,
+  body.cloth-resizing-nesw,
+  body.cloth-resizing-nesw * {
+    cursor: move !important;
+  }
+  body.cloth-resizing-ns, body.cloth-resizing-ns * { cursor: ns-resize !important; }
+  body.cloth-resizing-ew, body.cloth-resizing-ew * { cursor: ew-resize !important; }
+  body.cloth-resizing-nwse, body.cloth-resizing-nwse * { cursor: nwse-resize !important; }
+  body.cloth-resizing-nesw, body.cloth-resizing-nesw * { cursor: nesw-resize !important; }
+
+
+  .cloth-tool-btn {
+    appearance: none;
+    background: var(--panel);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    padding: 7px 10px;
+    font-family: inherit;
+    font-size: 10.5px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    cursor: pointer;
+    flex: 0 0 auto;
+    transition: border-color 0.1s ease, color 0.1s ease, background-color 0.1s ease;
+  }
+
+  .cloth-tool-btn:hover {
+    border-color: var(--ink);
+    background: var(--wash);
+  }
+
+  .cloth-tool-btn.hidden { display: none; }
+
+  .cloth-close-btn {
+    border-color: #d1453d;
+    color: #d1453d;
+  }
+
+  .cloth-close-btn:hover {
+    background: #d1453d;
+    color: #000;
+    border-color: #d1453d;
+  }
+
+  .resize-popup {
+    position: fixed;
+    top: 90px; left: 320px;
+    z-index: 25;
+    width: 250px;
+    max-width: 80vw;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    overflow: hidden;
+  }
+
+  .resize-popup.hidden { display: none; }
+
+  .popup-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 10px 12px 16px;
+    background: var(--wash);
+    border-bottom: 1px solid var(--line);
+    cursor: grab;
+    user-select: none;
+  }
+
+  .popup-head:active { cursor: grabbing; }
+
+  .popup-title {
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink);
+  }
+
+  .popup-close {
+    appearance: none;
+    background: var(--panel);
+    color: var(--ink-dim);
+    border: 1px solid var(--line);
+    width: 24px; height: 24px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    transition: border-color 0.1s ease, color 0.1s ease;
+  }
+
+  .popup-close:hover { border-color: var(--ink); color: var(--ink); }
+
+  .popup-body { padding: 16px; }
+  .popup-body .panel-label:first-child { margin-top: 0; }
